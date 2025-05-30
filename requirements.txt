@@ -1,0 +1,18 @@
+# 3D NC文件可视化器 - Python依赖项
+# 安装命令: pip install -r requirements.txt
+
+# NetCDF文件处理（用于生成示例数据）
+netCDF4>=1.5.8
+
+# 科学计算库（用于生成示例数据）
+numpy>=1.19.0
+
+# Web服务器框架
+flask>=2.0.0
+flask-cors>=3.0.0
+werkzeug>=2.0.0
+
+# 注意：
+# 1. 主要的可视化功能在前端实现，不需要额外的Python库
+# 2. 这些依赖项主要用于生成示例NC文件
+# 3. 如果只是运行可视化器，只需要Python的内置http.server模块

@@ -1,0 +1,15 @@
+{
+  "name": "3dncviewer",
+  "version": "1.0.0",
+  "description": "一个基于Cesium的3D NetCDF文件可视化工具，可以在三维地球上展示科学数据。",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cesium": "^1.129.0"
+  }
+}

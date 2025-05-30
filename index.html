@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D NC文件可视化器</title>
+    <!-- 本地Cesium库 -->
+    <script src="./cesium/Cesium.js"></script>
+    <link href="./cesium/Widgets/widgets.css" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    
+    <div id="toolbar">
+        <div class="toolbar-section">
+            <h3>NC文件加载</h3>
+            <input type="file" id="fileInput" accept=".nc" />
+            <button id="loadFile">加载文件</button>
+        </div>
+        
+        <div class="toolbar-section" id="variableSection" style="display: none;">
+            <h3>变量选择</h3>
+            <select id="variableSelect">
+                <option value="">选择变量</option>
+            </select>
+            <div id="dimensionSection" style="display: none; margin-top: 10px;">
+                <h4>维度选择</h4>
+                <div id="dimensionControls"></div>
+            </div>
+            <button id="visualizeVariable">可视化</button>
+        </div>
+        
+        <div class="toolbar-section" id="colorbarSection" style="display: none;">
+            <h3>显示设置</h3>
+            <label>最小值: <input type="number" id="minValue" step="any"></label>
+            <label>最大值: <input type="number" id="maxValue" step="any"></label>
+            <label>透明度: <input type="range" id="opacity" min="0" max="1" step="0.1" value="0.8"></label>
+            <label><input type="checkbox" id="showLand" checked> 显示陆地底图</label>
+            <label>颜色方案: 
+                <select id="colorScheme">
+                    <option value="grayscale">灰度</option>
+                    <option value="viridis">Viridis</option>
+                    <option value="plasma">Plasma</option>
+                    <option value="coolwarm">冷暖色</option>
+                </select>
+            </label>
+            <button id="updateColorbar">更新显示</button>
+        </div>
+        
+        <div class="toolbar-section" id="infoSection">
+            <h3>文件信息</h3>
+            <div id="fileInfo"></div>
+        </div>
+    </div>
+    
+    <div id="colorbar" style="display: none;">
+        <canvas id="colorbarCanvas" width="20" height="200"></canvas>
+        <div id="colorbarLabels"></div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
