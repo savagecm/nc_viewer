@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 
 # 配置
-PORT = 8080
+PORT = 8087
 HOST = 'localhost'
 
 class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -30,6 +30,24 @@ class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         """处理OPTIONS请求"""
         self.send_response(200)
         self.end_headers()
+    
+    def do_POST(self):
+        """处理POST请求"""
+        # 获取请求路径
+        path = self.path
+        
+        # 读取POST数据
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+        
+        # 简单的POST请求处理 - 返回成功响应
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        
+        # 返回简单的JSON响应
+        response = '{"status": "success", "message": "POST request received"}'
+        self.wfile.write(response.encode('utf-8'))
     
     def log_message(self, format, *args):
         """自定义日志格式"""

@@ -16,16 +16,14 @@ function initializeCesium() {
     try {
         // 设置Cesium基础路径（离线模式）
         window.CESIUM_BASE_URL = './cesium/';
+        
         // 检查Cesium是否加载
         if (typeof Cesium === 'undefined') {
             throw new Error('Cesium库未加载');
         }
         
-        // 设置Cesium离线模式
-        window.CESIUM_BASE_URL = './cesium/';
-        
-        // 禁用Cesium Ion默认访问令牌
-        Cesium.Ion.defaultAccessToken = undefined;
+        // 禁用Cesium Ion默认访问令牌（使用空字符串而不是undefined）
+        Cesium.Ion.defaultAccessToken = '';
         
         // 创建viewer
         viewer = new Cesium.Viewer('cesiumContainer', {
@@ -37,13 +35,41 @@ function initializeCesium() {
             timeline: false,
             fullscreenButton: true,
             vrButton: false,
-            // 使用默认地形和影像（离线模式）
-            terrainProvider: new Cesium.EllipsoidTerrainProvider(),
-            imageryProvider: new Cesium.SingleTileImageryProvider({
-                url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-                rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90)
-            })
+            // 使用默认地形（离线模式）
+            terrainProvider: new Cesium.EllipsoidTerrainProvider()
+            // 不指定imageryProvider，让Cesium使用默认影像
         });
+        
+        // 移除默认影像层并添加我们的地球纹理
+        viewer.imageryLayers.removeAll();
+        
+        // 尝试加载earth_8k.jpg作为地球纹理
+        console.log('正在尝试加载地球纹理...');
+        
+        const earthImageryProvider = new Cesium.SingleTileImageryProvider({
+            url: './cesium/Assets/Textures/earth_8k.jpg',
+            rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0)
+        });
+        
+        // 添加错误处理
+        if (earthImageryProvider.errorEvent) {
+            earthImageryProvider.errorEvent.addEventListener(function(error) {
+                console.error('地球纹理加载失败:', error);
+            });
+        }
+        
+        // 安全检查readyPromise是否存在
+        if (earthImageryProvider.readyPromise) {
+            earthImageryProvider.readyPromise.then(function() {
+                console.log('地球纹理加载成功!');
+            }).catch(function(error) {
+                console.error('地球纹理加载Promise失败:', error);
+            });
+        } else {
+            console.log('地球纹理提供者没有readyPromise属性');
+        }
+        
+        viewer.imageryLayers.addImageryProvider(earthImageryProvider);
         
         // 设置相机初始位置
         viewer.camera.setView({
@@ -53,7 +79,26 @@ function initializeCesium() {
         // 启用深度测试
         viewer.scene.globe.depthTestAgainstTerrain = false;
         
-        console.log('Cesium初始化成功');
+        // 确保底图显示
+        const baseLayer = viewer.imageryLayers.get(0);
+        if (baseLayer) {
+            baseLayer.show = true;
+            console.log('基础地图层已设置为显示');
+        } else {
+            console.warn('未找到基础地图层');
+        }
+        
+        // 添加地图层加载事件监听
+        viewer.imageryLayers.layerAdded.addEventListener(function(layer) {
+            console.log('地图层已添加:', layer);
+        });
+        
+        viewer.imageryLayers.layerRemoved.addEventListener(function(layer) {
+            console.log('地图层已移除:', layer);
+        });
+        
+        console.log('Cesium初始化成功，地图层数量:', viewer.imageryLayers.length);
+        console.log('基础地图提供者:', viewer.imageryLayers.get(0)?.imageryProvider?.constructor?.name);
         
     } catch (error) {
         console.error('Cesium初始化失败:', error);
@@ -671,18 +716,6 @@ document.addEventListener('DOMContentLoaded', function() {
             imageryLayers.get(i).alpha = opacity;
         }
     });
-    
-    // 陆地底图显示控制
-document.getElementById('showLand').addEventListener('change', function() {
-    if (viewer) {
-        // 控制地球的显示/隐藏
-        viewer.scene.globe.show = this.checked;
-        // 同时控制天空盒的显示
-        viewer.scene.skyBox.show = this.checked;
-        // 控制大气层效果
-        viewer.scene.skyAtmosphere.show = this.checked;
-    }
-});
     
     // 颜色方案变化监听
     document.getElementById('colorScheme').addEventListener('change', function() {
