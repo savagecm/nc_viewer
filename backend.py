@@ -43,6 +43,9 @@ def index():
 @app.route('/<path:filename>')
 def static_files(filename):
     """静态文件服务"""
+    # 排除API路径
+    if filename.startswith('api/'):
+        return jsonify({'error': 'API endpoint not found'}), 404
     return send_from_directory('.', filename)
 
 @app.route('/api/upload', methods=['POST'])

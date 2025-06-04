@@ -78,7 +78,12 @@ function uploadNCFile(file) {
         method: 'POST',
         body: formData
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+    })
     .then(data => {
         if (data.success) {
             console.log('文件上传成功:', data);
@@ -131,7 +136,12 @@ function displayFileInfo(info) {
 // 加载变量列表
 function loadVariables() {
     fetch(`${API_BASE}/variables`)
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+    })
     .then(data => {
         if (data.variables) {
             populateVariableSelect(data.variables);
