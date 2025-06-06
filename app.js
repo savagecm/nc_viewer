@@ -40,36 +40,19 @@ function initializeCesium() {
             // 不指定imageryProvider，让Cesium使用默认影像
         });
         
-        // 移除默认影像层并添加我们的地球纹理
+        // 移除默认影像层并添加earth_8k.jpg作为地球纹理
         viewer.imageryLayers.removeAll();
         
-        // 尝试加载earth_8k.jpg作为地球纹理
-        console.log('正在尝试加载地球纹理...');
+        // 加载earth_8k.jpg作为地球纹理
+        console.log('正在加载earth_8k.jpg地球纹理...');
         
         const earthImageryProvider = new Cesium.SingleTileImageryProvider({
             url: './cesium/Assets/Textures/earth_8k.jpg',
             rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0)
         });
         
-        // 添加错误处理
-        if (earthImageryProvider.errorEvent) {
-            earthImageryProvider.errorEvent.addEventListener(function(error) {
-                console.error('地球纹理加载失败:', error);
-            });
-        }
-        
-        // 安全检查readyPromise是否存在
-        if (earthImageryProvider.readyPromise) {
-            earthImageryProvider.readyPromise.then(function() {
-                console.log('地球纹理加载成功!');
-            }).catch(function(error) {
-                console.error('地球纹理加载Promise失败:', error);
-            });
-        } else {
-            console.log('地球纹理提供者没有readyPromise属性');
-        }
-        
         viewer.imageryLayers.addImageryProvider(earthImageryProvider);
+        console.log('earth_8k.jpg地球纹理加载完成');
         
         // 设置相机初始位置
         viewer.camera.setView({
@@ -301,15 +284,16 @@ function getDimensionParams() {
     return params.toString();
 }
 
-// 可视化选定的变量
+// 可视化选定的变量 - 使用后端完全处理的数据
 function visualizeVariable() {
     const variableName = document.getElementById('variableSelect').value;
+    
     if (!variableName) {
         alert('请选择一个变量');
         return;
     }
     
-    console.log('开始可视化变量:', variableName);
+    console.log('开始可视化变量:', variableName, '使用后端处理的数据');
     
     // 显示加载状态
     const visualizeButton = document.getElementById('visualizeVariable');
@@ -317,210 +301,302 @@ function visualizeVariable() {
     visualizeButton.textContent = '加载中...';
     visualizeButton.disabled = true;
     
-    // 获取坐标数据
-    fetch(`${API_BASE}/coordinates`)
-    .then(r => r.json())
-    .then(coordData => {
-        if (coordData.error) {
-            throw new Error(coordData.error);
-        }
-        
-        console.log('坐标数据加载成功');
-        
-        // 先存储当前变量信息
-        currentVariable = {
-            name: variableName,
-            data: null,
-            coordinates: {
-                latitudes: coordData.latitudes,
-                longitudes: coordData.longitudes
-            },
-            stats: null
-        };
-        
-        // 显示颜色条控制
-        document.getElementById('colorbarSection').style.display = 'block';
-        document.getElementById('colorbar').style.display = 'flex';
-        
-        // 创建3D可视化（只使用图像覆盖模式）
-        create3DVisualization(null, coordData.latitudes, coordData.longitudes, null);
-        
-    })
-    .catch(error => {
-        console.error('可视化错误:', error);
-        alert('可视化失败: ' + error.message);
-    })
+    // 使用后端完全处理的数据进行可视化
+    visualizeWithBackendData(variableName)
     .finally(() => {
         visualizeButton.textContent = originalText;
         visualizeButton.disabled = false;
     });
 }
 
-// 创建3D可视化
-function create3DVisualization(data, latitudes, longitudes, stats) {
-    if (!viewer) {
-        alert('3D地球未初始化');
-        return;
-    }
-    
-    console.log('创建3D可视化，数据点数:', latitudes.length * longitudes.length);
-    
-    // 清除之前的数据源和图像层
-    if (currentDataSource) {
-        viewer.dataSources.remove(currentDataSource);
-    }
-    
-    // 移除之前的图像层
-    const imageryLayers = viewer.imageryLayers;
-    for (let i = imageryLayers.length - 1; i >= 1; i--) {
-        imageryLayers.remove(imageryLayers.get(i));
-    }
-    
-    // 只使用灰度图像覆盖模式
-    console.log('使用图像覆盖模式显示数据');
-    createImageOverlay();
-}
+// 智能可视化数据加载
+async function visualizeWithBackendData(variableName) {
+    try {
+        // 显示加载状态
+        document.getElementById('loadingIndicator').style.display = 'block';
+        document.getElementById('loadingIndicator').textContent = '正在生成可视化图片...';
+        
+        // 获取当前设置
+        const colorScheme = document.getElementById('colorScheme').value || 'viridis';
+        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        
+        // 获取维度选择参数
+        const dimensionParams = getDimensionParams();
+        
+        // 清除之前的数据源和图像层
+        viewer.dataSources.removeAll();
+        // 清除所有图像层，为NC数据图片让路
+        viewer.imageryLayers.removeAll();
+        console.log('已清除所有图像层，准备显示NC数据图片');
+        
+        // 获取地图尺寸
+        const cesiumContainer = document.getElementById('cesiumContainer');
+        const width = cesiumContainer.clientWidth;
+        const height = cesiumContainer.clientHeight;
+        
+        // 构建图片请求URL
+        let imageUrl = `${API_BASE}/visualization/${variableName}/image?color_scheme=${colorScheme}&opacity=${opacity}&width=${Math.min(width, 2048)}&height=${Math.min(height, 1536)}`;
+        if (dimensionParams) {
+            imageUrl += '&' + dimensionParams.substring(1);
+        }
+        
+        console.log('请求图片URL:', imageUrl);
+        
+        // 获取数据边界信息
+        let infoUrl = `${API_BASE}/visualization/${variableName}/info`;
+        if (dimensionParams) {
+            infoUrl += '?' + dimensionParams.substring(1);
+        }
+        
+        const infoResponse = await fetch(infoUrl);
+        if (!infoResponse.ok) {
+            const errorData = await infoResponse.json();
+            throw new Error(errorData.error || `HTTP错误 ${infoResponse.status}`);
+        }
+        
+        const dataInfo = await infoResponse.json();
+        if (!dataInfo.success) {
+            throw new Error(dataInfo.error || '获取数据信息失败');
+        }
+        
+        console.log('数据信息:', dataInfo);
+        
+        // 验证空间范围数据并处理字段名映射
+        const rawExtent = dataInfo.spatial_extent;
+        if (!rawExtent) {
+            throw new Error('缺少空间范围数据');
+        }
+        
+        // 处理字段名映射：后端可能返回lat_max/lat_min/lon_max/lon_min格式
+        const extent = {
+            min_lon: rawExtent.min_lon || rawExtent.lon_min,
+            max_lon: rawExtent.max_lon || rawExtent.lon_max,
+            min_lat: rawExtent.min_lat || rawExtent.lat_min,
+            max_lat: rawExtent.max_lat || rawExtent.lat_max
+        };
+        
+        if (typeof extent.min_lon !== 'number' || 
+            typeof extent.min_lat !== 'number' || 
+            typeof extent.max_lon !== 'number' || 
+            typeof extent.max_lat !== 'number' ||
+            isNaN(extent.min_lon) || isNaN(extent.min_lat) || 
+            isNaN(extent.max_lon) || isNaN(extent.max_lat)) {
+            throw new Error('无效的空间范围数据: ' + JSON.stringify(rawExtent));
+        }
+        
+        console.log('验证通过的空间范围:', extent);
 
-// 创建图像覆盖层
-function createImageOverlay() {
-    if (!currentVariable) {
-        console.error('没有当前变量数据');
-        return;
-    }
-    
-    const variableName = currentVariable.name;
-    
-    // 获取维度参数和颜色方案
-    const dimensionParams = getDimensionParams();
-    const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-    
-    // 构建API URL
-    let apiUrl = `${API_BASE}/image/${variableName}`;
-    const params = new URLSearchParams();
-    
-    if (dimensionParams) {
-        const dimParams = new URLSearchParams(dimensionParams);
-        for (const [key, value] of dimParams) {
-            params.append(key, value);
+        // 添加图片图层 - 使用Entity和Rectangle方式
+        try {
+            // 先预加载图片，确保图片能正确加载
+            console.log('开始预加载图片:', imageUrl);
+            const imageLoadPromise = new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    console.log('图片预加载成功');
+                    resolve(img);
+                };
+                img.onerror = (error) => {
+                    console.error('图片预加载失败:', error);
+                    reject(new Error('图片加载失败: ' + imageUrl));
+                };
+                img.src = imageUrl;
+            });
+            
+            // 等待图片加载完成
+            await imageLoadPromise;
+            
+            // 创建数据源
+            const dataSource = new Cesium.CustomDataSource('ncImageData');
+            await viewer.dataSources.add(dataSource);
+            
+            // 使用ImageryLayer方式显示图片
+            const imageryProvider = new Cesium.SingleTileImageryProvider({
+                url: imageUrl,
+                rectangle: Cesium.Rectangle.fromDegrees(
+                    extent.min_lon,
+                    extent.min_lat,
+                    extent.max_lon,
+                    extent.max_lat
+                )
+            });
+            
+            const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
+            imageryLayer.alpha = opacity;
+            imageryLayer.show = true;
+            
+            // 确保NC数据图像层在最上层显示
+            const layerIndex = viewer.imageryLayers.indexOf(imageryLayer);
+            if (layerIndex !== viewer.imageryLayers.length - 1) {
+                viewer.imageryLayers.raise(imageryLayer);
+                console.log('已将NC数据图像层提升到顶层');
+            }
+            
+            console.log('图片图层添加成功:', {
+                url: imageUrl,
+                spatial_extent: dataInfo.spatial_extent,
+                alpha: opacity,
+                layerIndex: viewer.imageryLayers.indexOf(imageryLayer),
+                totalLayers: viewer.imageryLayers.length
+            });
+            
+            // 打印所有图像层信息
+            for (let i = 0; i < viewer.imageryLayers.length; i++) {
+                const layer = viewer.imageryLayers.get(i);
+                console.log(`图像层 ${i}:`, {
+                    show: layer.show,
+                    alpha: layer.alpha,
+                    providerType: layer.imageryProvider.constructor.name
+                });
+            }
+            
+            // 强制刷新场景
+            viewer.scene.requestRender();
+            
+        } catch (error) {
+            console.error('添加图片图层失败:', error);
+            throw new Error('无法添加图片图层: ' + error.message);
         }
-    }
-    
-    params.append('colorScheme', colorScheme);
-    apiUrl += `?${params.toString()}`;
-    
-    // 首先调用图像生成API
-    fetch(apiUrl)
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`生成图像失败: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(imageData => {
-        console.log('图像生成成功:', imageData);
         
-        // 从API响应中获取图像URL和数据范围
-        const imageUrl = imageData.image_url;
-        const dataMin = imageData.data_min;
-        const dataMax = imageData.data_max;
-        
-        console.log('创建图像覆盖层:', imageUrl);
-        console.log('数据范围:', dataMin, '到', dataMax);
-        
-        // 更新颜色范围显示
-        document.getElementById('minValue').value = dataMin.toFixed(3);
-        document.getElementById('maxValue').value = dataMax.toFixed(3);
-        
-        // 创建颜色条
-        createColorbar(dataMin, dataMax);
-        
-        // 获取坐标范围
-        const coordinates = currentVariable.coordinates;
-        const minLon = Math.min(...coordinates.longitudes);
-        const maxLon = Math.max(...coordinates.longitudes);
-        const minLat = Math.min(...coordinates.latitudes);
-        const maxLat = Math.max(...coordinates.latitudes);
-        
-        console.log(`坐标范围: 经度 ${minLon} 到 ${maxLon}, 纬度 ${minLat} 到 ${maxLat}`);
-        
-        // 创建图像提供者
-        const imageryProvider = new Cesium.SingleTileImageryProvider({
-            url: imageUrl,
-            rectangle: Cesium.Rectangle.fromDegrees(minLon, minLat, maxLon, maxLat)
-        });
-        
-        // 添加图像层
-        const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
-        
-        // 设置透明度
-        const opacity = parseFloat(document.getElementById('opacity').value);
-        imageryLayer.alpha = opacity;
-        
-        // 缩放到数据范围
-        const rectangle = Cesium.Rectangle.fromDegrees(minLon, minLat, maxLon, maxLat);
+        // 调整视图到数据边界
         viewer.camera.setView({
-            destination: rectangle
+            destination: Cesium.Rectangle.fromDegrees(
+                extent.min_lon,
+                extent.min_lat,
+                extent.max_lon,
+                extent.max_lat
+            )
         });
         
-        console.log('图像覆盖层创建完成');
-    })
-    .catch(error => {
-        console.error('创建图像覆盖层失败:', error);
-        alert('创建图像覆盖层失败: ' + error.message);
-    });
+        // 获取颜色条信息
+        const colorbarResponse = await fetch(`${API_BASE}/visualization/${variableName}/colorbar?color_scheme=${colorScheme}`);
+        if (colorbarResponse.ok) {
+            const colorbarData = await colorbarResponse.json();
+            if (colorbarData.success) {
+                updateColorbarFromBackendData(colorbarData);
+                document.getElementById('colorbarSection').style.display = 'block';
+                document.getElementById('colorbar').style.display = 'flex';
+                
+                // 存储当前变量信息
+                currentVariable = {
+                    name: variableName,
+                    stats: colorbarData.data_range,
+                    metadata: dataInfo.metadata
+                };
+            }
+        }
+        
+        console.log('图片可视化完成');
+        
+    } catch (error) {
+        console.error('智能数据可视化错误:', error);
+        alert('可视化失败: ' + error.message);
+    } finally {
+        // 隐藏加载状态
+        document.getElementById('loadingIndicator').style.display = 'none';
+    }
 }
 
-// 根据数值获取颜色
+// 删除了不再需要的数据点渲染函数，现在使用图片渲染
+
+// 根据后端数据更新颜色条
+function updateColorbarFromBackendData(colorbarData) {
+    const colorbarDiv = document.getElementById('colorbar');
+    colorbarDiv.innerHTML = '';
+    
+    const minValue = colorbarData.data_range.min;
+    const maxValue = colorbarData.data_range.max;
+    
+    // 更新输入框的值
+    document.getElementById('minValue').value = minValue.toFixed(3);
+    document.getElementById('maxValue').value = maxValue.toFixed(3);
+    
+    // 创建颜色条容器
+    const colorbarContainer = document.createElement('div');
+    colorbarContainer.style.display = 'flex';
+    colorbarContainer.style.flexDirection = 'column';
+    colorbarContainer.style.height = '200px';
+    colorbarContainer.style.width = '30px';
+    colorbarContainer.style.border = '1px solid #ccc';
+    
+    // 使用后端提供的颜色条数据
+    const colors = colorbarData.colorbar;
+    const stepHeight = 200 / colors.length;
+    
+    colors.forEach((colorStep, index) => {
+        const colorDiv = document.createElement('div');
+        const rgb = colorStep.color;
+        colorDiv.style.backgroundColor = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+        colorDiv.style.height = `${stepHeight}px`;
+        colorDiv.style.width = '100%';
+        colorbarContainer.appendChild(colorDiv);
+    });
+    
+    // 创建标签容器
+    const labelsContainer = document.createElement('div');
+    labelsContainer.style.display = 'flex';
+    labelsContainer.style.flexDirection = 'column';
+    labelsContainer.style.justifyContent = 'space-between';
+    labelsContainer.style.height = '200px';
+    labelsContainer.style.marginLeft = '5px';
+    labelsContainer.style.fontSize = '12px';
+    
+    // 添加标签
+    const numLabels = 5;
+    for (let i = 0; i < numLabels; i++) {
+        const labelDiv = document.createElement('div');
+        const value = maxValue - (i / (numLabels - 1)) * (maxValue - minValue);
+        labelDiv.textContent = value.toFixed(2);
+        labelsContainer.appendChild(labelDiv);
+    }
+    
+    // 组装颜色条
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.appendChild(colorbarContainer);
+    wrapper.appendChild(labelsContainer);
+    
+    colorbarDiv.appendChild(wrapper);
+}
+
+
+
+
+
+// 根据数值获取颜色 - 使用简化的颜色映射
 function getColorForValue(normalizedValue, colorScheme = 'viridis') {
-    const colorMaps = {
-        viridis: [
-            [68, 1, 84],
-            [72, 40, 120],
-            [62, 74, 137],
-            [49, 104, 142],
-            [38, 130, 142],
-            [31, 158, 137],
-            [53, 183, 121],
-            [109, 205, 89],
-            [180, 222, 44],
-            [253, 231, 37]
-        ],
-        plasma: [
-            [13, 8, 135],
-            [75, 3, 161],
-            [125, 3, 168],
-            [168, 34, 150],
-            [203, 70, 121],
-            [229, 107, 93],
-            [248, 148, 65],
-            [253, 195, 40],
-            [239, 248, 33]
-        ],
-        coolwarm: [
-            [59, 76, 192],
-            [98, 130, 234],
-            [141, 176, 254],
-            [184, 208, 249],
-            [221, 221, 221],
-            [245, 183, 142],
-            [235, 127, 96],
-            [215, 48, 39],
-            [165, 0, 38]
-        ],
-        jet: [
-            [0, 0, 143],
-            [0, 0, 255],
-            [0, 127, 255],
-            [0, 255, 255],
-            [127, 255, 127],
-            [255, 255, 0],
-            [255, 127, 0],
-            [255, 0, 0],
-            [127, 0, 0]
-        ]
+    // 基本颜色映射，用于前端预览
+    const basicColorMaps = {
+        viridis: [[68, 1, 84], [253, 231, 37]],
+        plasma: [[13, 8, 135], [239, 248, 33]],
+        inferno: [[0, 0, 4], [252, 255, 164]],
+        magma: [[0, 0, 4], [252, 253, 191]],
+        cividis: [[0, 32, 77], [255, 233, 69]],
+        coolwarm: [[59, 76, 192], [165, 0, 38]],
+        RdYlBu: [[165, 0, 38], [49, 54, 149]],
+        RdBu: [[103, 0, 31], [5, 48, 97]],
+        seismic: [[0, 0, 76], [128, 0, 0]],
+        jet: [[0, 0, 143], [127, 0, 0]],
+        hot: [[0, 0, 0], [255, 255, 255]],
+        cool: [[0, 255, 255], [255, 0, 255]],
+        spring: [[255, 0, 255], [255, 255, 0]],
+        summer: [[0, 128, 102], [255, 255, 102]],
+        autumn: [[255, 0, 0], [255, 255, 0]],
+        winter: [[0, 0, 255], [0, 255, 128]],
+        gray: [[0, 0, 0], [255, 255, 255]],
+        bone: [[0, 0, 0], [255, 255, 255]],
+        copper: [[0, 0, 0], [255, 200, 127]],
+        pink: [[30, 0, 0], [255, 255, 255]],
+        Greys: [[0, 0, 0], [255, 255, 255]],
+        Blues: [[247, 251, 255], [8, 48, 107]],
+        Greens: [[247, 252, 245], [0, 68, 27]],
+        Reds: [[255, 245, 240], [103, 0, 13]],
+        Oranges: [[255, 245, 235], [127, 39, 4]],
+        Purples: [[252, 251, 253], [63, 0, 125]]
     };
     
-    const colors = colorMaps[colorScheme] || colorMaps.viridis;
+    const colors = basicColorMaps[colorScheme] || basicColorMaps.viridis;
     
     const index = Math.floor(normalizedValue * (colors.length - 1));
     const nextIndex = Math.min(index + 1, colors.length - 1);
@@ -655,7 +731,7 @@ function updateColorbar() {
     
     // 如果有当前变量，重新可视化
     if (currentVariable) {
-        createImageOverlay(currentVariable);
+        visualizeVariable();
     }
 }
 
@@ -703,19 +779,60 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 其他事件监听器
     document.getElementById('visualizeVariable').addEventListener('click', visualizeVariable);
-    document.getElementById('updateColorbar').addEventListener('click', updateColorbar);
+    
+    // 更新颜色条按钮事件
+     document.getElementById('updateColorbar').addEventListener('click', function() {
+         if (!currentVariable || !currentVariable.name) {
+             alert('请先选择并可视化一个变量');
+             return;
+         }
+         
+         const minValue = parseFloat(document.getElementById('minValue').value);
+         const maxValue = parseFloat(document.getElementById('maxValue').value);
+         
+         if (isNaN(minValue) || isNaN(maxValue) || minValue >= maxValue) {
+             alert('请输入有效的最小值和最大值（最小值必须小于最大值）');
+             return;
+         }
+         
+         // 更新颜色条
+         createColorbar(minValue, maxValue);
+         
+         // 重新渲染Cesium数据点
+         updateCesiumDataColors(minValue, maxValue);
+     });
+    
+    // 更新Cesium数据点颜色
+    function updateCesiumDataColors(minValue, maxValue) {
+        const colorScheme = document.getElementById('colorScheme').value || 'viridis';
+        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        
+        viewer.dataSources.getByName('ncData').forEach(dataSource => {
+            dataSource.entities.values.forEach(entity => {
+                if (entity.point && entity.properties && entity.properties.value) {
+                    const value = entity.properties.value.getValue();
+                    const color = getColorForValue(value, minValue, maxValue, colorScheme);
+                    entity.point.color = Cesium.Color.fromCssColorString(color).withAlpha(opacity);
+                }
+            });
+        });
+    }
     
     // 透明度滑块事件
-    document.getElementById('opacity').addEventListener('input', function(e) {
-        const opacity = parseFloat(e.target.value);
-        document.getElementById('opacityValue').textContent = (opacity * 100).toFixed(0) + '%';
-        
-        // 更新图像层透明度
-        const imageryLayers = viewer.imageryLayers;
-        for (let i = imageryLayers.length - 1; i >= 1; i--) {
-            imageryLayers.get(i).alpha = opacity;
-        }
-    });
+     document.getElementById('opacity').addEventListener('input', function(e) {
+         const opacity = parseFloat(e.target.value);
+         document.getElementById('opacityValue').textContent = (opacity * 100).toFixed(0) + '%';
+         
+         // 更新Cesium数据点的透明度
+         viewer.dataSources.getByName('ncData').forEach(dataSource => {
+             dataSource.entities.values.forEach(entity => {
+                 if (entity.point) {
+                     const currentColor = entity.point.color.getValue();
+                     entity.point.color = currentColor.withAlpha(opacity);
+                 }
+             });
+         });
+     });
     
     // 颜色方案变化监听
     document.getElementById('colorScheme').addEventListener('change', function() {
@@ -726,3 +843,96 @@ document.addEventListener('DOMContentLoaded', function() {
     
     console.log('事件监听器添加完成');
 });
+
+
+// 使用GeoJSON渲染数据
+async function visualizeWithGeoJSON(variableName) {
+    console.log('开始使用GeoJSON渲染变量:', variableName);
+    
+    // 获取维度选择参数
+    const dimensionParams = getDimensionParams();
+    
+    // 构建请求URL
+    let url = `${API_BASE}/geojson/${variableName}`;
+    if (dimensionParams) {
+        url += dimensionParams;
+    }
+    
+    // 显示加载状态
+    document.getElementById('loadingIndicator').style.display = 'block';
+    
+    try {
+        // 获取GeoJSON数据
+        const response = await fetch(url);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP错误 ${response.status}`);
+        }
+        
+        const geojsonData = await response.json();
+        console.log('GeoJSON数据获取成功，特征数量:', geojsonData.properties.total_features);
+        
+        // 清除之前的数据源和图像层
+        viewer.dataSources.removeAll();
+        // 清除所有图像层，为NC数据图片让路
+        viewer.imageryLayers.removeAll();
+        console.log('已清除所有图像层，准备显示NC数据图片');
+        
+        // 获取颜色方案和透明度
+        const colorScheme = document.getElementById('colorScheme').value || 'viridis';
+        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        
+        // 创建数据源
+        const dataSource = new Cesium.GeoJsonDataSource('ncData');
+        
+        // 设置数据范围
+        const minValue = geojsonData.properties.data_min;
+        const maxValue = geojsonData.properties.data_max;
+        
+        // 更新颜色条
+        document.getElementById('minValue').value = minValue.toFixed(3);
+        document.getElementById('maxValue').value = maxValue.toFixed(3);
+        generateColorbar(minValue, maxValue, colorScheme);
+        
+        // 显示颜色条控制
+        document.getElementById('colorbarSection').style.display = 'block';
+        document.getElementById('colorbar').style.display = 'flex';
+        
+        // 加载GeoJSON数据
+        console.log('开始加载GeoJSON数据到Cesium...');
+        const startTime = performance.now();
+        
+        // 设置点样式回调函数
+        const styleOptions = {
+            markerColor: function(feature) {
+                const value = feature.properties.value;
+                // 归一化值
+                const normalizedValue = (value - minValue) / (maxValue - minValue);
+                // 获取颜色
+                return Cesium.Color.fromCssColorString(getColorForValue(normalizedValue, colorScheme)).withAlpha(opacity);
+            },
+            markerSize: 8,
+            clampToGround: false
+        };
+        
+        // 加载GeoJSON数据
+        await dataSource.load(geojsonData, styleOptions);
+        
+        // 添加数据源到viewer
+        await viewer.dataSources.add(dataSource);
+        
+        // 缩放到数据范围
+        viewer.zoomTo(dataSource);
+        
+        const endTime = performance.now();
+        console.log(`GeoJSON渲染完成，耗时: ${(endTime - startTime) / 1000} 秒`);
+        console.log(`渲染了 ${geojsonData.properties.total_features} 个特征`);
+        
+    } catch (error) {
+        console.error('GeoJSON渲染错误:', error);
+        alert('GeoJSON渲染失败: ' + error.message);
+    } finally {
+        // 隐藏加载状态
+        document.getElementById('loadingIndicator').style.display = 'none';
+    }
+}

@@ -11,7 +11,7 @@ numpy>=1.19.0
 flask>=2.0.0
 flask-cors>=3.0.0
 werkzeug>=2.0.0
-
+opencv-python
 # 注意：
 # 1. 主要的可视化功能在前端实现，不需要额外的Python库
 # 2. 这些依赖项主要用于生成示例NC文件

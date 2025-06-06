@@ -193,3 +193,10 @@ input[type="range"] {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(72, 182, 255, 0.8);
 }
+
+
+/* 加载指示器动画 */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}

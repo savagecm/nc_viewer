@@ -12,6 +12,14 @@
 <body>
     <div id="cesiumContainer"></div>
     
+    <!-- 加载指示器 -->
+    <div id="loadingIndicator" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 5px; z-index: 1000;">
+        <div style="text-align: center;">
+            <div style="border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto 10px;"></div>
+            <div>正在加载数据...</div>
+        </div>
+    </div>
+    
     <div id="toolbar">
         <div class="toolbar-section">
             <h3>NC文件加载</h3>
@@ -35,15 +43,48 @@
             <h3>显示设置</h3>
             <label>最小值: <input type="number" id="minValue" step="any"></label>
             <label>最大值: <input type="number" id="maxValue" step="any"></label>
+            <label>颜色方案:</label>
+            <select id="colorScheme">
+                <option value="viridis">Viridis</option>
+                <option value="plasma">Plasma</option>
+                <option value="inferno">Inferno</option>
+                <option value="magma">Magma</option>
+                <option value="cividis">Cividis</option>
+                <option value="coolwarm">Cool-Warm</option>
+                <option value="RdYlBu">Red-Yellow-Blue</option>
+                <option value="RdBu">Red-Blue</option>
+                <option value="seismic">Seismic</option>
+                <option value="jet">Jet</option>
+                <option value="hot">Hot</option>
+                <option value="cool">Cool</option>
+                <option value="spring">Spring</option>
+                <option value="summer">Summer</option>
+                <option value="autumn">Autumn</option>
+                <option value="winter">Winter</option>
+                <option value="gray">灰度</option>
+                <option value="bone">Bone</option>
+                <option value="copper">Copper</option>
+                <option value="pink">Pink</option>
+                <option value="Greys">Greys</option>
+                <option value="Blues">Blues</option>
+                <option value="Greens">Greens</option>
+                <option value="Reds">Reds</option>
+                <option value="Oranges">Oranges</option>
+                <option value="Purples">Purples</option>
+                <option value="BuGn">Blue-Green</option>
+                <option value="BuPu">Blue-Purple</option>
+                <option value="GnBu">Green-Blue</option>
+                <option value="OrRd">Orange-Red</option>
+                <option value="PuBu">Purple-Blue</option>
+                <option value="PuRd">Purple-Red</option>
+                <option value="RdPu">Red-Purple</option>
+                <option value="YlGn">Yellow-Green</option>
+                <option value="YlOrBr">Yellow-Orange-Brown</option>
+                <option value="YlOrRd">Yellow-Orange-Red</option>
+            </select>
+            
             <label>透明度: <input type="range" id="opacity" min="0" max="1" step="0.1" value="0.8"></label>
-            <label>颜色方案: 
-                <select id="colorScheme">
-                    <option value="grayscale">灰度</option>
-                    <option value="viridis">Viridis</option>
-                    <option value="plasma">Plasma</option>
-                    <option value="coolwarm">冷暖色</option>
-                </select>
-            </label>
+            
             <button id="updateColorbar">更新显示</button>
         </div>
         
