@@ -621,7 +621,6 @@ def get_visualization_data(variable_name):
         
         # 获取参数
         color_scheme = request.args.get('color_scheme', 'viridis')
-        opacity = float(request.args.get('opacity', 0.8))
         
         # 分页参数
         page = int(request.args.get('page', 1))
@@ -641,7 +640,7 @@ def get_visualization_data(variable_name):
         depth_index = request.args.get('depth_index', type=int)
         
         print(f"开始处理变量 {variable_name} 的可视化数据")
-        print(f"颜色方案: {color_scheme}, 透明度: {opacity}")
+        print(f"颜色方案: {color_scheme}")
         print(f"分页参数: 第{page}页, 每页{page_size}个点")
         print(f"采样率: {sample_rate}")
         if lat_min is not None:
@@ -813,8 +812,7 @@ def get_visualization_data(variable_name):
                 'longitude': point['lon'],
                 'latitude': point['lat'],
                 'value': point['value'],
-                'color': rgb_color,
-                'opacity': opacity
+                'color': rgb_color
             })
         
         # 生成颜色条数据
@@ -844,7 +842,6 @@ def get_visualization_data(variable_name):
                 'max': data_max
             },
             'color_scheme': color_scheme,
-            'opacity': opacity,
             'points': visualization_points,
             'colorbar': colorbar_data,
             'metadata': {
@@ -905,7 +902,6 @@ def generate_visualization_image(variable_name):
         
         # 获取参数
         color_scheme = request.args.get('color_scheme', 'viridis')
-        opacity = float(request.args.get('opacity', 0.8))
         
         # 注意：图片尺寸将完全基于NC数据的网格大小，忽略URL中的width和height参数
         
@@ -914,7 +910,7 @@ def generate_visualization_image(variable_name):
         depth_index = request.args.get('depth_index', type=int)
         
         print(f"生成变量 {variable_name} 的可视化图片")
-        print(f"参数: 颜色方案={color_scheme}, 透明度={opacity}")
+        print(f"参数: 颜色方案={color_scheme}")
         
         # 获取变量数据
         var_data = current_nc_data.variables[variable_name]
@@ -979,26 +975,9 @@ def generate_visualization_image(variable_name):
         if np.any(valid_mask):
             valid_data = data[valid_mask]
             
-            # 使用百分位数方法移除极端值
-            p1 = np.percentile(valid_data, 1)
-            p99 = np.percentile(valid_data, 99)
+    
             
-            # 过滤掉超出1%-99%范围的极端值
-            percentile_mask = (data >= p1) & (data <= p99)
-            valid_mask = valid_mask & percentile_mask
-            
-            if np.any(valid_mask):
-                filtered_data = data[valid_mask]
-                q1 = np.percentile(filtered_data, 25)
-                q3 = np.percentile(filtered_data, 75)
-                iqr = q3 - q1
-                
-                # 使用1.5倍IQR标准
-                lower_bound = q1 - 1.5 * iqr
-                upper_bound = q3 + 1.5 * iqr
-                
-                final_outlier_mask = (data >= lower_bound) & (data <= upper_bound)
-                valid_mask = valid_mask & final_outlier_mask
+         
         
         if not np.any(valid_mask):
             return jsonify({'error': '没有有效的数据点'}), 400
@@ -1086,11 +1065,20 @@ def generate_visualization_image(variable_name):
             print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
             cmap = cm.get_cmap('viridis')
         
-        # 标准化数据到0-1范围
+        # 标准化数据到0-1范围（忽略NaN值）
+        print(f"Normalize数据范围: [{data_min:.6f}, {data_max:.6f}]")
         norm = Normalize(vmin=data_min, vmax=data_max)
-        normalized_data = norm(data_filtered)
         
-        # 应用colormap
+        # 创建一个副本用于归一化，保持NaN值不变
+        normalized_data = np.full_like(data_filtered, np.nan)
+        
+        # 只对有效数据进行归一化
+        valid_data_mask = ~np.isnan(data_filtered)
+        if np.any(valid_data_mask):
+            normalized_data[valid_data_mask] = norm(data_filtered[valid_data_mask])
+            print(f"归一化了 {np.sum(valid_data_mask)} 个有效数据点，忽略了 {np.sum(~valid_data_mask)} 个NaN值")
+        
+        # 应用colormap（NaN值会被colormap自动处理为透明或特殊颜色）
         colored_data = cmap(normalized_data)
         
         # 转换为OpenCV格式 (BGR, 0-255)
@@ -1103,8 +1091,7 @@ def generate_visualization_image(variable_name):
         nan_mask = np.isnan(data_filtered)
         alpha_channel[nan_mask] = 0  # NaN值设为完全透明
         
-        # 应用用户设置的透明度
-        alpha_channel = (alpha_channel * opacity).astype(np.uint8)
+        # 移除用户设置的透明度功能，只保留NaN值的透明处理
         
         # 调整数据图片大小以匹配目标尺寸
         bgr_resized = cv2.resize(bgr_data, (width, height), interpolation=cv2.INTER_LINEAR)
@@ -1153,80 +1140,61 @@ def get_colorbar_info(variable_name):
         
         color_scheme = request.args.get('color_scheme', 'viridis')
         
-        # 获取数据范围（简化版本，不处理所有数据）
+        # 获取数据范围（与图片生成保持一致）
         var_data = current_nc_data.variables[variable_name]
         
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
         
-        # 根据维度提取数据样本
+        # 根据维度提取数据（与图片生成函数保持一致）
         if len(var_data.shape) == 4:  # (time, depth, lat, lon)
             t_idx = time_index if time_index is not None else 0
             d_idx = depth_index if depth_index is not None else 0
-            sample_data = var_data[t_idx, d_idx, ::10, ::10]  # 采样
+            data = var_data[t_idx, d_idx, :, :]
         elif len(var_data.shape) == 3:
             if time_index is not None:
-                sample_data = var_data[time_index, ::10, ::10]
+                data = var_data[time_index, :, :]
             elif depth_index is not None:
-                sample_data = var_data[depth_index, ::10, ::10]
+                data = var_data[depth_index, :, :]
             else:
-                sample_data = var_data[0, ::10, ::10]
+                data = var_data[0, :, :]
         elif len(var_data.shape) == 2:  # (lat, lon)
-            sample_data = var_data[::10, ::10]
+            data = var_data[:, :]
         else:
             return jsonify({'error': f'不支持的数据维度: {var_data.shape}'}), 400
         
-        # 转换为numpy数组并处理异常值
-        sample_data = np.array(sample_data)
+        # 转换为numpy数组并处理异常值（与图片生成保持一致）
+        data = np.array(data)
+        
+        # 沿着纬度方向翻转数据（与图片生成保持一致）
+        data = np.flipud(data)
         
         # 处理 masked array 和 NaN 值
-        if hasattr(sample_data, 'mask'):
-            valid_mask = ~sample_data.mask
-            sample_data = sample_data.data
+        if hasattr(data, 'mask'):
+            valid_mask = ~data.mask
+            data = data.data
         else:
-            valid_mask = np.ones(sample_data.shape, dtype=bool)
+            valid_mask = np.ones(data.shape, dtype=bool)
         
-        # 过滤异常值
-        finite_mask = np.isfinite(sample_data)
+        # 过滤异常值（与图片生成保持一致，只做基础过滤）
+        finite_mask = np.isfinite(data)
         valid_mask = valid_mask & finite_mask
         
         # 应用绝对值上限过滤（10^10）
         absolute_limit = 1e10
-        absolute_mask = np.abs(sample_data) <= absolute_limit
+        absolute_mask = np.abs(data) <= absolute_limit
         valid_mask = valid_mask & absolute_mask
-        
-        if np.any(valid_mask):
-            valid_data = sample_data[valid_mask]
-            
-            # 使用百分位数方法移除极端值
-            p1 = np.percentile(valid_data, 1)
-            p99 = np.percentile(valid_data, 99)
-            
-            # 过滤掉超出1%-99%范围的极端值
-            percentile_mask = (sample_data >= p1) & (sample_data <= p99)
-            valid_mask = valid_mask & percentile_mask
-            
-            if np.any(valid_mask):
-                filtered_data = sample_data[valid_mask]
-                q1 = np.percentile(filtered_data, 25)
-                q3 = np.percentile(filtered_data, 75)
-                iqr = q3 - q1
-                
-                # 使用1.5倍IQR标准
-                lower_bound = q1 - 1.5 * iqr
-                upper_bound = q3 + 1.5 * iqr
-                
-                final_outlier_mask = (sample_data >= lower_bound) & (sample_data <= upper_bound)
-                valid_mask = valid_mask & final_outlier_mask
         
         if not np.any(valid_mask):
             return jsonify({'error': '没有有效的数据点'}), 400
         
-        # 计算数据范围
-        valid_data = sample_data[valid_mask]
+        # 计算数据范围（与图片生成保持一致）
+        valid_data = data[valid_mask]
         data_min = np.min(valid_data)
         data_max = np.max(valid_data)
+        
+        print(f"Colorbar数据范围: [{data_min:.6f}, {data_max:.6f}]")
         
         # 处理颜色方案映射
         color_scheme_mapping = {

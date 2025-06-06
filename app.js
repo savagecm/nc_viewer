@@ -318,7 +318,7 @@ async function visualizeWithBackendData(variableName) {
         
         // 获取当前设置
         const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        // 移除opacity参数，不再使用透明度功能
         
         // 获取维度选择参数
         const dimensionParams = getDimensionParams();
@@ -329,13 +329,8 @@ async function visualizeWithBackendData(variableName) {
         viewer.imageryLayers.removeAll();
         console.log('已清除所有图像层，准备显示NC数据图片');
         
-        // 获取地图尺寸
-        const cesiumContainer = document.getElementById('cesiumContainer');
-        const width = cesiumContainer.clientWidth;
-        const height = cesiumContainer.clientHeight;
-        
-        // 构建图片请求URL
-        let imageUrl = `${API_BASE}/visualization/${variableName}/image?color_scheme=${colorScheme}&opacity=${opacity}&width=${Math.min(width, 2048)}&height=${Math.min(height, 1536)}`;
+        // 构建图片请求URL（移除width、height和opacity参数，让后端根据NC数据尺寸生成）
+        let imageUrl = `${API_BASE}/visualization/${variableName}/image?color_scheme=${colorScheme}`;
         if (dimensionParams) {
             imageUrl += '&' + dimensionParams.substring(1);
         }
@@ -423,7 +418,7 @@ async function visualizeWithBackendData(variableName) {
             });
             
             const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
-            imageryLayer.alpha = opacity;
+            // 移除透明度设置，使用默认值
             imageryLayer.show = true;
             
             // 确保NC数据图像层在最上层显示
@@ -436,7 +431,7 @@ async function visualizeWithBackendData(variableName) {
             console.log('图片图层添加成功:', {
                 url: imageUrl,
                 spatial_extent: dataInfo.spatial_extent,
-                alpha: opacity,
+                // 移除透明度设置，使用默认值
                 layerIndex: viewer.imageryLayers.indexOf(imageryLayer),
                 totalLayers: viewer.imageryLayers.length
             });
@@ -517,8 +512,11 @@ function updateColorbarFromBackendData(colorbarData) {
     colorbarContainer.style.display = 'flex';
     colorbarContainer.style.flexDirection = 'column';
     colorbarContainer.style.height = '200px';
-    colorbarContainer.style.width = '30px';
-    colorbarContainer.style.border = '1px solid #ccc';
+    colorbarContainer.style.width = '35px';
+    colorbarContainer.style.borderRadius = '8px';
+    colorbarContainer.style.overflow = 'hidden';
+    colorbarContainer.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.3)';
+    colorbarContainer.style.border = '1px solid rgba(255, 255, 255, 0.3)';
     
     // 使用后端提供的颜色条数据
     const colors = colorbarData.colorbar;
@@ -539,15 +537,24 @@ function updateColorbarFromBackendData(colorbarData) {
     labelsContainer.style.flexDirection = 'column';
     labelsContainer.style.justifyContent = 'space-between';
     labelsContainer.style.height = '200px';
-    labelsContainer.style.marginLeft = '5px';
+    labelsContainer.style.marginLeft = '8px';
     labelsContainer.style.fontSize = '12px';
+    labelsContainer.style.color = '#ffffff';
+    labelsContainer.style.fontWeight = '500';
+    labelsContainer.style.position = 'relative';
     
-    // 添加标签
+    // 添加标签（从最小值到最大值，对应颜色条从上到下）
     const numLabels = 5;
     for (let i = 0; i < numLabels; i++) {
         const labelDiv = document.createElement('div');
-        const value = maxValue - (i / (numLabels - 1)) * (maxValue - minValue);
+        const value = minValue + (i / (numLabels - 1)) * (maxValue - minValue);
         labelDiv.textContent = value.toFixed(2);
+        labelDiv.style.position = 'absolute';
+        labelDiv.style.top = `${(i / (numLabels - 1)) * 100}%`;
+        labelDiv.style.transform = 'translateY(-50%)';
+        labelDiv.style.color = '#ffffff';
+        labelDiv.style.fontWeight = '500';
+        labelDiv.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
         labelsContainer.appendChild(labelDiv);
     }
     
@@ -568,7 +575,7 @@ function updateColorbarFromBackendData(colorbarData) {
 function getColorForValue(normalizedValue, colorScheme = 'viridis') {
     // 基本颜色映射，用于前端预览
     const basicColorMaps = {
-        viridis: [[68, 1, 84], [253, 231, 37]],
+        viridis: [[68, 1, 84], [253, 231, 37]], // 0->深紫色, 1->亮黄色
         plasma: [[13, 8, 135], [239, 248, 33]],
         inferno: [[0, 0, 4], [252, 255, 164]],
         magma: [[0, 0, 4], [252, 253, 191]],
@@ -648,12 +655,18 @@ function updateColorbarLabels(minVal, maxVal) {
     const labelsDiv = document.getElementById('colorbarLabels');
     labelsDiv.innerHTML = '';
     
-    // 创建5个标签
+    // 创建5个标签，从最小值到最大值（顶部到底部）
     for (let i = 0; i <= 4; i++) {
-        const value = maxVal - (i / 4) * (maxVal - minVal);
+        const value = minVal + (i / 4) * (maxVal - minVal);
         const label = document.createElement('div');
         label.textContent = value.toFixed(3);
         label.style.textAlign = 'left';
+        label.style.position = 'absolute';
+        label.style.top = `${(i / 4) * 100}%`;
+        label.style.transform = 'translateY(-50%)';
+        label.style.color = '#ffffff';
+        label.style.fontWeight = '500';
+        label.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
         labelsDiv.appendChild(label);
     }
 }
@@ -668,14 +681,17 @@ function generateColorbar(minValue, maxValue, colorScheme = 'viridis') {
     colorbarContainer.style.display = 'flex';
     colorbarContainer.style.flexDirection = 'column';
     colorbarContainer.style.height = '200px';
-    colorbarContainer.style.width = '30px';
-    colorbarContainer.style.border = '1px solid #ccc';
+    colorbarContainer.style.width = '35px';
+    colorbarContainer.style.borderRadius = '8px';
+    colorbarContainer.style.overflow = 'hidden';
+    colorbarContainer.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.3)';
+    colorbarContainer.style.border = '1px solid rgba(255, 255, 255, 0.3)';
     
-    // 创建颜色渐变
+    // 创建颜色渐变（从上到下：最大值到最小值）
     const steps = 50;
     for (let i = 0; i < steps; i++) {
         const colorDiv = document.createElement('div');
-        const ratio = i / (steps - 1);
+        const ratio = 1 - (i / (steps - 1)); // 反转ratio，使顶部对应最大值
         const color = getColorForValue(ratio, colorScheme);
         colorDiv.style.backgroundColor = color;
         colorDiv.style.height = `${200/steps}px`;
@@ -689,15 +705,24 @@ function generateColorbar(minValue, maxValue, colorScheme = 'viridis') {
     labelsContainer.style.flexDirection = 'column';
     labelsContainer.style.justifyContent = 'space-between';
     labelsContainer.style.height = '200px';
-    labelsContainer.style.marginLeft = '5px';
+    labelsContainer.style.marginLeft = '8px';
     labelsContainer.style.fontSize = '12px';
+    labelsContainer.style.color = '#ffffff';
+    labelsContainer.style.fontWeight = '500';
+    labelsContainer.style.position = 'relative';
     
-    // 添加标签
+    // 添加标签（从最小值到最大值，对应颜色条从上到下）
     const numLabels = 5;
     for (let i = 0; i < numLabels; i++) {
         const labelDiv = document.createElement('div');
-        const value = maxValue - (i / (numLabels - 1)) * (maxValue - minValue);
+        const value = minValue + (i / (numLabels - 1)) * (maxValue - minValue);
         labelDiv.textContent = value.toFixed(2);
+        labelDiv.style.position = 'absolute';
+        labelDiv.style.top = `${(i / (numLabels - 1)) * 100}%`;
+        labelDiv.style.transform = 'translateY(-50%)';
+        labelDiv.style.color = '#ffffff';
+        labelDiv.style.fontWeight = '500';
+        labelDiv.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
         labelsContainer.appendChild(labelDiv);
     }
     
@@ -805,34 +830,20 @@ document.addEventListener('DOMContentLoaded', function() {
     // 更新Cesium数据点颜色
     function updateCesiumDataColors(minValue, maxValue) {
         const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        // 移除opacity参数，不再使用透明度功能
         
         viewer.dataSources.getByName('ncData').forEach(dataSource => {
             dataSource.entities.values.forEach(entity => {
                 if (entity.point && entity.properties && entity.properties.value) {
                     const value = entity.properties.value.getValue();
                     const color = getColorForValue(value, minValue, maxValue, colorScheme);
-                    entity.point.color = Cesium.Color.fromCssColorString(color).withAlpha(opacity);
+                    entity.point.color = Cesium.Color.fromCssColorString(color);
                 }
             });
         });
     }
     
-    // 透明度滑块事件
-     document.getElementById('opacity').addEventListener('input', function(e) {
-         const opacity = parseFloat(e.target.value);
-         document.getElementById('opacityValue').textContent = (opacity * 100).toFixed(0) + '%';
-         
-         // 更新Cesium数据点的透明度
-         viewer.dataSources.getByName('ncData').forEach(dataSource => {
-             dataSource.entities.values.forEach(entity => {
-                 if (entity.point) {
-                     const currentColor = entity.point.color.getValue();
-                     entity.point.color = currentColor.withAlpha(opacity);
-                 }
-             });
-         });
-     });
+    // 移除透明度控制功能
     
     // 颜色方案变化监听
     document.getElementById('colorScheme').addEventListener('change', function() {
@@ -880,7 +891,7 @@ async function visualizeWithGeoJSON(variableName) {
         
         // 获取颜色方案和透明度
         const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-        const opacity = parseFloat(document.getElementById('opacity').value) || 0.8;
+        // 移除opacity参数，不再使用透明度功能
         
         // 创建数据源
         const dataSource = new Cesium.GeoJsonDataSource('ncData');
@@ -909,7 +920,7 @@ async function visualizeWithGeoJSON(variableName) {
                 // 归一化值
                 const normalizedValue = (value - minValue) / (maxValue - minValue);
                 // 获取颜色
-                return Cesium.Color.fromCssColorString(getColorForValue(normalizedValue, colorScheme)).withAlpha(opacity);
+                return Cesium.Color.fromCssColorString(getColorForValue(normalizedValue, colorScheme));
             },
             markerSize: 8,
             clampToGround: false
