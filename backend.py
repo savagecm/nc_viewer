@@ -427,10 +427,47 @@ def get_variable_image(variable_name):
         # 将NaN设置为0（黑色）
         normalized_data[~valid_mask] = 0
         
+        # 自定义颜色映射函数
+        def apply_custom_colormap(data, colormap):
+            """应用自定义颜色映射到归一化数据"""
+            height, width = data.shape
+            rgb_image = np.zeros((height, width, 3), dtype=np.uint8)
+            
+            # 将颜色映射转换为numpy数组以便向量化操作
+            positions = np.array([item['position'] for item in colormap])
+            colors = np.array([item['color'] for item in colormap])
+            
+            # 对每个像素进行颜色插值
+            for i in range(height):
+                for j in range(width):
+                    value = data[i, j]
+                    if np.isnan(value):
+                        rgb_image[i, j] = [0, 0, 0]  # NaN值设为黑色
+                        continue
+                    
+                    # 找到对应的颜色区间
+                    if value <= positions[0]:
+                        rgb_image[i, j] = colors[0]
+                    elif value >= positions[-1]:
+                        rgb_image[i, j] = colors[-1]
+                    else:
+                        # 线性插值
+                        for k in range(len(positions) - 1):
+                            if positions[k] <= value <= positions[k + 1]:
+                                t = (value - positions[k]) / (positions[k + 1] - positions[k])
+                                rgb_image[i, j] = colors[k] + t * (colors[k + 1] - colors[k])
+                                break
+            
+            return rgb_image.astype(np.uint8)
+        
         # 应用颜色映射（优化版本，使用向量化操作）
-        def apply_colormap(data, colormap_name):
-            """应用颜色映射到归一化数据 - 使用matplotlib内置颜色映射"""
+        def apply_colormap(data, colormap_name, custom_colormap=None):
+            """应用颜色映射到归一化数据 - 支持matplotlib内置颜色映射和自定义颜色映射"""
             import matplotlib.cm as cm
+            
+            # 如果使用自定义颜色映射
+            if custom_colormap and colormap_name == 'custom':
+                return apply_custom_colormap(data, custom_colormap)
             
             # 颜色方案映射
             color_scheme_mapping = {
@@ -543,16 +580,25 @@ def get_variable_image(variable_name):
             print(f"灰度图生成完成，耗时: {end_time - start_time:.3f}秒")
         else:
             # 应用颜色映射生成彩色图（多线程优化）
-            print(f"开始生成彩色图，数据尺寸: {normalized_data.shape}，颜色方案: {color_scheme}")
+            print(f"开始生成彩色图，数据尺寸: {normalized_data.shape}，颜色方案: {color_scheme}，透明度: {opacity}")
             start_time = time.time()
             
-            rgb_data = apply_colormap(normalized_data, color_scheme)
+            rgb_data = apply_colormap(normalized_data, color_scheme, custom_colormap)
             
             # 翻转Y轴（图像坐标系与地理坐标系相反）
             rgb_data = np.flipud(rgb_data)
             
-            # 创建PIL图像
-            img = Image.fromarray(rgb_data, mode='RGB')
+            # 如果透明度不是1.0，创建RGBA图像
+            if opacity < 1.0:
+                height, width = rgb_data.shape[:2]
+                rgba_data = np.zeros((height, width, 4), dtype=np.uint8)
+                rgba_data[:, :, :3] = rgb_data  # RGB通道
+                rgba_data[:, :, 3] = np.where(valid_mask, int(opacity * 255), 0)  # Alpha通道
+                rgba_data[:, :, 3] = np.flipud(rgba_data[:, :, 3])  # 翻转Alpha通道
+                img = Image.fromarray(rgba_data, mode='RGBA')
+            else:
+                # 创建PIL图像
+                img = Image.fromarray(rgb_data, mode='RGB')
             
             end_time = time.time()
             print(f"彩色图生成完成，耗时: {end_time - start_time:.3f}秒")
@@ -621,6 +667,29 @@ def get_visualization_data(variable_name):
         
         # 获取参数
         color_scheme = request.args.get('color_scheme', 'viridis')
+        custom_colormap_str = request.args.get('custom_colormap')
+        custom_colormap = None
+        
+        # 解析自定义颜色映射
+        if custom_colormap_str:
+            try:
+                custom_colormap = json.loads(custom_colormap_str)
+                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
+            except json.JSONDecodeError:
+                print("自定义颜色映射解析失败，使用默认颜色方案")
+                custom_colormap = None
+        opacity = float(request.args.get('opacity', 1.0))
+        custom_colormap_str = request.args.get('custom_colormap')
+        
+        # 解析自定义颜色映射
+        custom_colormap = None
+        if custom_colormap_str:
+            try:
+                custom_colormap = json.loads(custom_colormap_str)
+                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
+            except json.JSONDecodeError as e:
+                print(f"自定义颜色映射解析失败: {e}")
+                return jsonify({'error': '自定义颜色映射格式错误'}), 400
         
         # 分页参数
         page = int(request.args.get('page', 1))
@@ -806,7 +875,7 @@ def get_visualization_data(variable_name):
             normalized_value = (point['value'] - data_min) / (data_max - data_min) if data_max != data_min else 0.5
             
             # 获取颜色
-            rgb_color = get_color_for_value(normalized_value, color_scheme)
+            rgb_color = get_color_for_value(normalized_value, color_scheme, custom_colormap)
             
             visualization_points.append({
                 'longitude': point['lon'],
@@ -821,7 +890,7 @@ def get_visualization_data(variable_name):
         for i in range(num_steps):
             normalized_value = i / (num_steps - 1)
             value = data_min + normalized_value * (data_max - data_min)
-            rgb_color = get_color_for_value(normalized_value, color_scheme)
+            rgb_color = get_color_for_value(normalized_value, color_scheme, custom_colormap)
             colorbar_data.append({
                 'value': value,
                 'color': rgb_color,
@@ -860,8 +929,13 @@ def get_visualization_data(variable_name):
         traceback.print_exc()
         return jsonify({'error': f'获取可视化数据失败: {str(e)}'}), 500
 
-def get_color_for_value(normalized_value, scheme='viridis'):
-    """根据归一化值和颜色方案获取RGB颜色 - 使用matplotlib内置颜色映射"""
+def get_color_for_value(normalized_value, scheme='viridis', custom_colormap=None):
+    """根据归一化值和颜色方案获取RGB颜色 - 支持matplotlib内置颜色映射和自定义颜色映射"""
+    
+    # 如果使用自定义颜色映射
+    if custom_colormap and scheme == 'custom':
+        return get_color_from_custom_colormap(normalized_value, custom_colormap)
+    
     import matplotlib.cm as cm
     
     # 颜色方案映射
@@ -887,6 +961,34 @@ def get_color_for_value(normalized_value, scheme='viridis'):
     # 转换为RGB格式 (0-255)
     return [int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)]
 
+def get_color_from_custom_colormap(normalized_value, colormap):
+    """从自定义颜色映射获取颜色"""
+    if not colormap or len(colormap) == 0:
+        return [0, 0, 0]
+    
+    # 如果只有一个颜色点
+    if len(colormap) == 1:
+        return colormap[0]['color']
+    
+    # 找到对应的颜色区间
+    for i in range(len(colormap) - 1):
+        current = colormap[i]
+        next_color = colormap[i + 1]
+        
+        if current['position'] <= normalized_value <= next_color['position']:
+            # 线性插值
+            t = (normalized_value - current['position']) / (next_color['position'] - current['position'])
+            r = int(current['color'][0] + t * (next_color['color'][0] - current['color'][0]))
+            g = int(current['color'][1] + t * (next_color['color'][1] - current['color'][1]))
+            b = int(current['color'][2] + t * (next_color['color'][2] - current['color'][2]))
+            return [r, g, b]
+    
+    # 如果超出范围，返回最近的颜色
+    if normalized_value <= colormap[0]['position']:
+        return colormap[0]['color']
+    else:
+        return colormap[-1]['color']
+
 
 @app.route('/api/visualization/<variable_name>/image', methods=['GET'])
 def generate_visualization_image(variable_name):
@@ -902,6 +1004,29 @@ def generate_visualization_image(variable_name):
         
         # 获取参数
         color_scheme = request.args.get('color_scheme', 'viridis')
+        custom_colormap_str = request.args.get('custom_colormap')
+        custom_colormap = None
+        
+        # 解析自定义颜色映射
+        if custom_colormap_str:
+            try:
+                custom_colormap = json.loads(custom_colormap_str)
+                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
+            except json.JSONDecodeError:
+                print("自定义颜色映射解析失败，使用默认颜色方案")
+                custom_colormap = None
+        opacity = float(request.args.get('opacity', 1.0))
+        custom_colormap_str = request.args.get('custom_colormap')
+        
+        # 解析自定义颜色映射
+        custom_colormap = None
+        if custom_colormap_str:
+            try:
+                custom_colormap = json.loads(custom_colormap_str)
+                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
+            except json.JSONDecodeError as e:
+                print(f"自定义颜色映射解析失败: {e}")
+                return jsonify({'error': '自定义颜色映射格式错误'}), 400
         
         # 注意：图片尺寸将完全基于NC数据的网格大小，忽略URL中的width和height参数
         
@@ -1058,13 +1183,6 @@ def generate_visualization_image(variable_name):
         # 如果是自定义的颜色方案名称，映射到matplotlib支持的名称
         mapped_scheme = color_scheme_mapping.get(color_scheme, color_scheme)
         
-        # 获取colormap
-        try:
-            cmap = cm.get_cmap(mapped_scheme)
-        except ValueError:
-            print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
-            cmap = cm.get_cmap('viridis')
-        
         # 标准化数据到0-1范围（忽略NaN值）
         print(f"Normalize数据范围: [{data_min:.6f}, {data_max:.6f}]")
         norm = Normalize(vmin=data_min, vmax=data_max)
@@ -1078,8 +1196,33 @@ def generate_visualization_image(variable_name):
             normalized_data[valid_data_mask] = norm(data_filtered[valid_data_mask])
             print(f"归一化了 {np.sum(valid_data_mask)} 个有效数据点，忽略了 {np.sum(~valid_data_mask)} 个NaN值")
         
-        # 应用colormap（NaN值会被colormap自动处理为透明或特殊颜色）
-        colored_data = cmap(normalized_data)
+        # 应用颜色映射（支持自定义颜色映射）
+        if custom_colormap and color_scheme == 'custom':
+            print(f"使用自定义颜色映射生成图像")
+            # 创建RGB数组
+            colored_data = np.zeros((normalized_data.shape[0], normalized_data.shape[1], 4), dtype=np.float32)
+            
+            # 对每个像素应用自定义颜色映射
+            for i in range(normalized_data.shape[0]):
+                for j in range(normalized_data.shape[1]):
+                    if not np.isnan(normalized_data[i, j]):
+                        rgb_color = get_color_from_custom_colormap(normalized_data[i, j], custom_colormap)
+                        colored_data[i, j, 0] = rgb_color[0] / 255.0  # R
+                        colored_data[i, j, 1] = rgb_color[1] / 255.0  # G
+                        colored_data[i, j, 2] = rgb_color[2] / 255.0  # B
+                        colored_data[i, j, 3] = 1.0  # A
+                    else:
+                        colored_data[i, j, :] = [0, 0, 0, 0]  # 透明
+        else:
+            # 获取matplotlib colormap
+            try:
+                cmap = cm.get_cmap(mapped_scheme)
+            except ValueError:
+                print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
+                cmap = cm.get_cmap('viridis')
+            
+            # 应用colormap（NaN值会被colormap自动处理为透明或特殊颜色）
+            colored_data = cmap(normalized_data)
         
         # 转换为OpenCV格式 (BGR, 0-255)
         # matplotlib colormap输出RGBA，需要转换为BGR
@@ -1139,6 +1282,17 @@ def get_colorbar_info(variable_name):
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         color_scheme = request.args.get('color_scheme', 'viridis')
+        custom_colormap_str = request.args.get('custom_colormap')
+        custom_colormap = None
+        
+        # 解析自定义颜色映射
+        if custom_colormap_str:
+            try:
+                custom_colormap = json.loads(custom_colormap_str)
+                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
+            except json.JSONDecodeError:
+                print("自定义颜色映射解析失败，使用默认颜色方案")
+                custom_colormap = None
         
         # 获取数据范围（与图片生成保持一致）
         var_data = current_nc_data.variables[variable_name]
@@ -1207,24 +1361,39 @@ def get_colorbar_info(variable_name):
         mapped_scheme = color_scheme_mapping.get(color_scheme, color_scheme)
         
         # 生成颜色条
-        try:
-            cmap = cm.get_cmap(mapped_scheme)
-        except ValueError:
-            print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
-            cmap = cm.get_cmap('viridis')
         colorbar_steps = []
         num_steps = 20
         
-        for i in range(num_steps):
-            normalized_value = i / (num_steps - 1)
-            actual_value = data_min + normalized_value * (data_max - data_min)
-            color = cmap(normalized_value)
+        if custom_colormap and color_scheme == 'custom':
+            # 使用自定义颜色映射
+            for i in range(num_steps):
+                normalized_value = i / (num_steps - 1)
+                actual_value = data_min + normalized_value * (data_max - data_min)
+                color = get_color_from_custom_colormap(normalized_value, custom_colormap)
+                
+                colorbar_steps.append({
+                    'value': actual_value,
+                    'normalized': normalized_value,
+                    'color': color
+                })
+        else:
+            # 使用matplotlib颜色映射
+            try:
+                cmap = cm.get_cmap(mapped_scheme)
+            except ValueError:
+                print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
+                cmap = cm.get_cmap('viridis')
             
-            colorbar_steps.append({
-                'value': actual_value,
-                'normalized': normalized_value,
-                'color': [int(c * 255) for c in color[:3]]  # RGB
-            })
+            for i in range(num_steps):
+                normalized_value = i / (num_steps - 1)
+                actual_value = data_min + normalized_value * (data_max - data_min)
+                color = cmap(normalized_value)
+                
+                colorbar_steps.append({
+                    'value': actual_value,
+                    'normalized': normalized_value,
+                    'color': [int(c * 255) for c in color[:3]]  # RGB
+                })
         
         return jsonify({
             'success': True,

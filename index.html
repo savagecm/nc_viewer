@@ -36,7 +36,6 @@
                 <h4>维度选择</h4>
                 <div id="dimensionControls"></div>
             </div>
-            <button id="visualizeVariable">可视化</button>
         </div>
         
         <div class="toolbar-section" id="colorbarSection" style="display: none;">
@@ -81,10 +80,21 @@
                 <option value="YlGn">Yellow-Green</option>
                 <option value="YlOrBr">Yellow-Orange-Brown</option>
                 <option value="YlOrRd">Yellow-Orange-Red</option>
+                <option value="custom">自定义颜色映射</option>
             </select>
             
-            <!-- 移除透明度控件 -->
+            <div id="customColormapSection" style="display: none; margin-top: 10px;">
+                <label>上传自定义颜色映射 (JSON格式):</label>
+                <input type="file" id="customColormapFile" accept=".json" />
+                <div id="customColormapInfo" style="font-size: 12px; color: #666; margin-top: 5px;">
+                    JSON格式示例: [{"position": 0.0, "color": [255, 0, 0]}, {"position": 1.0, "color": [0, 0, 255]}]
+                </div>
+            </div>
             
+            <label>透明度: <span id="opacityValue">1.0</span></label>
+            <input type="range" id="opacity" min="0" max="1" step="0.1" value="1.0" style="width: 100%;">
+            
+            <button id="visualizeVariable">可视化 (Viridis)</button>
             <button id="updateColorbar">更新显示</button>
         </div>
         

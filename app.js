@@ -5,6 +5,7 @@ let currentVariable;
 let fileInfo;
 let colorbarCanvas;
 let colorbarCtx;
+let customColormap = null; // 存储自定义颜色映射
 
 // API基础URL
 const API_BASE = '/api';
@@ -119,6 +120,10 @@ function uploadNCFile(file) {
             displayFileInfo(data.file_info);
             loadVariables();
             document.getElementById('variableSection').style.display = 'block';
+            document.getElementById('colorbarSection').style.display = 'block';
+            
+            // 初始化可视化按钮文本
+            updateVisualizeButtonText();
         } else {
             throw new Error(data.error || '上传失败');
         }
@@ -318,7 +323,16 @@ async function visualizeWithBackendData(variableName) {
         
         // 获取当前设置
         const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-        // 移除opacity参数，不再使用透明度功能
+        const opacity = parseFloat(document.getElementById('opacity').value) || 1.0;
+        
+        // 检查是否使用自定义颜色映射
+        let useCustomColormap = false;
+        if (colorScheme === 'custom' && customColormap) {
+            useCustomColormap = true;
+        } else if (colorScheme === 'custom' && !customColormap) {
+            alert('请先上传自定义颜色映射文件');
+            return;
+        }
         
         // 获取维度选择参数
         const dimensionParams = getDimensionParams();
@@ -329,8 +343,11 @@ async function visualizeWithBackendData(variableName) {
         viewer.imageryLayers.removeAll();
         console.log('已清除所有图像层，准备显示NC数据图片');
         
-        // 构建图片请求URL（移除width、height和opacity参数，让后端根据NC数据尺寸生成）
-        let imageUrl = `${API_BASE}/visualization/${variableName}/image?color_scheme=${colorScheme}`;
+        // 构建图片请求URL
+        let imageUrl = `${API_BASE}/visualization/${variableName}/image?color_scheme=${colorScheme}&opacity=${opacity}`;
+        if (useCustomColormap) {
+            imageUrl += '&custom_colormap=' + encodeURIComponent(JSON.stringify(customColormap));
+        }
         if (dimensionParams) {
             imageUrl += '&' + dimensionParams.substring(1);
         }
@@ -465,7 +482,14 @@ async function visualizeWithBackendData(variableName) {
         });
         
         // 获取颜色条信息
-        const colorbarResponse = await fetch(`${API_BASE}/visualization/${variableName}/colorbar?color_scheme=${colorScheme}`);
+        console.log('Debug: colorScheme =', colorScheme, 'customColormap =', customColormap);
+        let colorbarUrl = `${API_BASE}/visualization/${variableName}/colorbar?color_scheme=${colorScheme}`;
+        if (colorScheme === 'custom' && customColormap) {
+            colorbarUrl += `&custom_colormap=${encodeURIComponent(JSON.stringify(customColormap))}`;
+            console.log('Debug: 添加了custom_colormap参数');
+        }
+        console.log('Debug: colorbarUrl =', colorbarUrl);
+        const colorbarResponse = await fetch(colorbarUrl);
         if (colorbarResponse.ok) {
             const colorbarData = await colorbarResponse.json();
             if (colorbarData.success) {
@@ -830,14 +854,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // 更新Cesium数据点颜色
     function updateCesiumDataColors(minValue, maxValue) {
         const colorScheme = document.getElementById('colorScheme').value || 'viridis';
-        // 移除opacity参数，不再使用透明度功能
+        const opacity = parseFloat(document.getElementById('opacity').value) || 1.0;
         
         viewer.dataSources.getByName('ncData').forEach(dataSource => {
             dataSource.entities.values.forEach(entity => {
                 if (entity.point && entity.properties && entity.properties.value) {
                     const value = entity.properties.value.getValue();
                     const color = getColorForValue(value, minValue, maxValue, colorScheme);
-                    entity.point.color = Cesium.Color.fromCssColorString(color);
+                    const cesiumColor = Cesium.Color.fromCssColorString(color);
+                    cesiumColor.alpha = opacity;
+                    entity.point.color = cesiumColor;
                 }
             });
         });
@@ -847,14 +873,174 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 颜色方案变化监听
     document.getElementById('colorScheme').addEventListener('change', function() {
+        const customSection = document.getElementById('customColormapSection');
+        if (this.value === 'custom') {
+            customSection.style.display = 'block';
+        } else {
+            customSection.style.display = 'none';
+        }
+        
+        // 更新可视化按钮文本
+        updateVisualizeButtonText();
+        
         if (currentVariable) {
             updateColorbar();
         }
     });
     
+    // 透明度变化监听
+    document.getElementById('opacity').addEventListener('input', function() {
+        document.getElementById('opacityValue').textContent = this.value;
+        if (currentVariable) {
+            updateColorbar();
+        }
+    });
+    
+    // 自定义颜色映射文件上传
+    document.getElementById('customColormapFile').addEventListener('change', function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const jsonData = JSON.parse(e.target.result);
+                
+                // 验证JSON格式
+                if (!Array.isArray(jsonData)) {
+                    throw new Error('颜色映射必须是数组格式');
+                }
+                
+                for (let i = 0; i < jsonData.length; i++) {
+                    const item = jsonData[i];
+                    if (!item.hasOwnProperty('position') || !item.hasOwnProperty('color')) {
+                        throw new Error('每个颜色映射项必须包含position和color字段');
+                    }
+                    if (typeof item.position !== 'number' || item.position < 0 || item.position > 1) {
+                        throw new Error('position值必须是0-1之间的数字');
+                    }
+                    if (!Array.isArray(item.color) || item.color.length !== 3) {
+                        throw new Error('color必须是包含3个RGB值的数组');
+                    }
+                    for (let j = 0; j < 3; j++) {
+                        if (typeof item.color[j] !== 'number' || item.color[j] < 0 || item.color[j] > 255) {
+                            throw new Error('RGB值必须是0-255之间的整数');
+                        }
+                    }
+                }
+                
+                // 按position排序
+                jsonData.sort((a, b) => a.position - b.position);
+                
+                customColormap = jsonData;
+                alert('自定义颜色映射加载成功！');
+                
+                // 如果当前选择的是自定义颜色映射，重新可视化
+                if (document.getElementById('colorScheme').value === 'custom' && currentVariable) {
+                    updateColorbar();
+                }
+                
+            } catch (error) {
+                alert('颜色映射文件格式错误: ' + error.message);
+                customColormap = null;
+            }
+        };
+        reader.readAsText(file);
+    });
+    
+    // 初始化可视化按钮文本
+    updateVisualizeButtonText();
+    
     console.log('事件监听器添加完成');
 });
 
+
+// 更新可视化按钮文本显示当前颜色方案
+function updateVisualizeButtonText() {
+    const colorScheme = document.getElementById('colorScheme').value || 'viridis';
+    const button = document.getElementById('visualizeVariable');
+    
+    // 颜色方案名称映射
+    const schemeNames = {
+        'viridis': 'Viridis',
+        'plasma': 'Plasma',
+        'inferno': 'Inferno',
+        'magma': 'Magma',
+        'cividis': 'Cividis',
+        'coolwarm': 'Cool-Warm',
+        'RdYlBu': 'Red-Yellow-Blue',
+        'RdBu': 'Red-Blue',
+        'seismic': 'Seismic',
+        'jet': 'Jet',
+        'hot': 'Hot',
+        'cool': 'Cool',
+        'spring': 'Spring',
+        'summer': 'Summer',
+        'autumn': 'Autumn',
+        'winter': 'Winter',
+        'gray': '灰度',
+        'bone': 'Bone',
+        'copper': 'Copper',
+        'pink': 'Pink',
+        'Greys': 'Greys',
+        'Blues': 'Blues',
+        'Greens': 'Greens',
+        'Reds': 'Reds',
+        'Oranges': 'Oranges',
+        'Purples': 'Purples',
+        'BuGn': 'Blue-Green',
+        'BuPu': 'Blue-Purple',
+        'GnBu': 'Green-Blue',
+        'OrRd': 'Orange-Red',
+        'PuBu': 'Purple-Blue',
+        'PuRd': 'Purple-Red',
+        'RdPu': 'Red-Purple',
+        'YlGn': 'Yellow-Green',
+        'YlOrBr': 'Yellow-Orange-Brown',
+        'YlOrRd': 'Yellow-Orange-Red',
+        'custom': '自定义颜色映射'
+    };
+    
+    const schemeName = schemeNames[colorScheme] || colorScheme;
+    button.textContent = `可视化 (${schemeName})`;
+}
+
+// 根据自定义颜色映射获取颜色
+function getColorFromCustomColormap(normalizedValue, colormap) {
+    if (!colormap || colormap.length === 0) {
+        return 'rgb(0, 0, 0)';
+    }
+    
+    // 如果只有一个颜色点
+    if (colormap.length === 1) {
+        const color = colormap[0].color;
+        return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+    }
+    
+    // 找到对应的颜色区间
+    for (let i = 0; i < colormap.length - 1; i++) {
+        const current = colormap[i];
+        const next = colormap[i + 1];
+        
+        if (normalizedValue >= current.position && normalizedValue <= next.position) {
+            // 线性插值
+            const t = (normalizedValue - current.position) / (next.position - current.position);
+            const r = Math.round(current.color[0] + t * (next.color[0] - current.color[0]));
+            const g = Math.round(current.color[1] + t * (next.color[1] - current.color[1]));
+            const b = Math.round(current.color[2] + t * (next.color[2] - current.color[2]));
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+    }
+    
+    // 如果超出范围，返回最近的颜色
+    if (normalizedValue <= colormap[0].position) {
+        const color = colormap[0].color;
+        return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+    } else {
+        const color = colormap[colormap.length - 1].color;
+        return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+    }
+}
 
 // 使用GeoJSON渲染数据
 async function visualizeWithGeoJSON(variableName) {
