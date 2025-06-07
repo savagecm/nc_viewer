@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  3dncviewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 3dncviewer
+    ports:
+      - "5000:5000"
+    volumes:
+      # 挂载数据目录，用于持久化上传的NC文件
+      - ./data:/app/uploads
+      # 可选：挂载示例数据
+      - ./sample_data:/app/sample_data:ro
+    environment:
+      - FLASK_ENV=production
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# 可选：添加nginx反向代理（用于生产环境）
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: 3dncviewer-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - 3dncviewer
+  #   restart: unless-stopped
+
+volumes:
+  # 创建命名卷用于数据持久化
+  nc_data:
+    driver: local
+
+networks:
+  default:
+    name: 3dncviewer-network
