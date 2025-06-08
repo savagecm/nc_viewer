@@ -18,6 +18,10 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
 import time
+
+# 全局缓存变量
+_earth_texture_cache = None
+_earth_texture_path_cache = None
 import cv2
 import matplotlib.cm as cm
 from matplotlib.colors import Normalize
@@ -989,6 +993,45 @@ def get_color_from_custom_colormap(normalized_value, colormap):
     else:
         return colormap[-1]['color']
 
+def apply_custom_colormap_vectorized(normalized_values, colormap):
+    """向量化应用自定义颜色映射，大幅提升性能"""
+    if not colormap or len(colormap) == 0:
+        return np.zeros((len(normalized_values), 3), dtype=np.uint8)
+    
+    # 如果只有一个颜色点
+    if len(colormap) == 1:
+        color = np.array(colormap[0]['color'], dtype=np.uint8)
+        return np.tile(color, (len(normalized_values), 1))
+    
+    # 提取位置和颜色数组
+    positions = np.array([point['position'] for point in colormap])
+    colors = np.array([point['color'] for point in colormap], dtype=np.float32)
+    
+    # 使用numpy的searchsorted找到插值区间
+    indices = np.searchsorted(positions, normalized_values, side='right') - 1
+    
+    # 处理边界情况
+    indices = np.clip(indices, 0, len(colormap) - 2)
+    
+    # 计算插值权重
+    pos_left = positions[indices]
+    pos_right = positions[indices + 1]
+    
+    # 避免除零错误
+    pos_diff = pos_right - pos_left
+    pos_diff = np.where(pos_diff == 0, 1, pos_diff)
+    
+    t = (normalized_values - pos_left) / pos_diff
+    t = np.clip(t, 0, 1)
+    
+    # 线性插值颜色
+    colors_left = colors[indices]
+    colors_right = colors[indices + 1]
+    
+    interpolated_colors = colors_left + t[:, np.newaxis] * (colors_right - colors_left)
+    
+    return interpolated_colors.astype(np.uint8)
+
 
 @app.route('/api/visualization/<variable_name>/image', methods=['GET'])
 def generate_visualization_image(variable_name):
@@ -1107,14 +1150,14 @@ def generate_visualization_image(variable_name):
         if not np.any(valid_mask):
             return jsonify({'error': '没有有效的数据点'}), 400
         
-        # 将无效数据设为NaN
-        data_filtered = data.copy().astype(float)
-        data_filtered[~valid_mask] = np.nan
-        
-        # 计算数据范围
-        valid_data = data_filtered[valid_mask]
+        # 优化数据处理：直接使用有效数据计算范围，避免不必要的复制
+        valid_data = data[valid_mask]
         data_min = np.min(valid_data)
         data_max = np.max(valid_data)
+        
+        # 只在需要时创建过滤后的数据数组
+        data_filtered = data.astype(float, copy=False)  # 避免不必要的复制
+        data_filtered = np.where(valid_mask, data_filtered, np.nan)  # 向量化操作
         
         print(f"数据范围: [{data_min:.6f}, {data_max:.6f}]")
         
@@ -1134,15 +1177,23 @@ def generate_visualization_image(variable_name):
         
         print(f"数据地理范围: 纬度[{lat_min:.2f}, {lat_max:.2f}], 经度[{lon_min:.2f}, {lon_max:.2f}]")
         
-        # 加载地球底图
+        # 加载地球底图（使用缓存优化）
         earth_texture_path = os.path.join(os.path.dirname(__file__), 'cesium', 'Assets', 'Textures', 'earth_8k.jpg')
         if not os.path.exists(earth_texture_path):
             raise Exception(f"找不到地球纹理文件: {earth_texture_path}")
         
-        # 读取地球纹理
-        earth_img = cv2.imread(earth_texture_path)
-        if earth_img is None:
-            raise Exception("无法读取地球纹理文件")
+        # 使用全局缓存避免重复加载
+        global _earth_texture_cache, _earth_texture_path_cache
+        if _earth_texture_cache is None or _earth_texture_path_cache != earth_texture_path:
+            print("加载地球纹理到缓存...")
+            _earth_texture_cache = cv2.imread(earth_texture_path)
+            _earth_texture_path_cache = earth_texture_path
+            if _earth_texture_cache is None:
+                raise Exception("无法读取地球纹理文件")
+        else:
+            print("使用缓存的地球纹理")
+        
+        earth_img = _earth_texture_cache
         
         # 地球纹理的尺寸和地理范围
         earth_height, earth_width = earth_img.shape[:2]
@@ -1198,21 +1249,26 @@ def generate_visualization_image(variable_name):
         
         # 应用颜色映射（支持自定义颜色映射）
         if custom_colormap and color_scheme == 'custom':
-            print(f"使用自定义颜色映射生成图像")
+            print(f"使用自定义颜色映射生成图像（向量化优化版本）")
             # 创建RGB数组
             colored_data = np.zeros((normalized_data.shape[0], normalized_data.shape[1], 4), dtype=np.float32)
             
-            # 对每个像素应用自定义颜色映射
-            for i in range(normalized_data.shape[0]):
-                for j in range(normalized_data.shape[1]):
-                    if not np.isnan(normalized_data[i, j]):
-                        rgb_color = get_color_from_custom_colormap(normalized_data[i, j], custom_colormap)
-                        colored_data[i, j, 0] = rgb_color[0] / 255.0  # R
-                        colored_data[i, j, 1] = rgb_color[1] / 255.0  # G
-                        colored_data[i, j, 2] = rgb_color[2] / 255.0  # B
-                        colored_data[i, j, 3] = 1.0  # A
-                    else:
-                        colored_data[i, j, :] = [0, 0, 0, 0]  # 透明
+            # 向量化处理自定义颜色映射
+            valid_mask = ~np.isnan(normalized_data)
+            if np.any(valid_mask):
+                # 提取有效数据
+                valid_values = normalized_data[valid_mask]
+                
+                # 向量化应用自定义颜色映射
+                rgb_colors = apply_custom_colormap_vectorized(valid_values, custom_colormap)
+                
+                # 将结果分配回原始数组
+                colored_data[valid_mask, 0] = rgb_colors[:, 0] / 255.0  # R
+                colored_data[valid_mask, 1] = rgb_colors[:, 1] / 255.0  # G
+                colored_data[valid_mask, 2] = rgb_colors[:, 2] / 255.0  # B
+                colored_data[valid_mask, 3] = 1.0  # A
+                
+                print(f"向量化处理了 {len(valid_values)} 个有效数据点")
         else:
             # 获取matplotlib colormap
             try:
@@ -1240,16 +1296,16 @@ def generate_visualization_image(variable_name):
         bgr_resized = cv2.resize(bgr_data, (width, height), interpolation=cv2.INTER_LINEAR)
         alpha_resized = cv2.resize(alpha_channel, (width, height), interpolation=cv2.INTER_LINEAR)
         
-        # 将NC数据叠加到地球纹理上
-        final_img = earth_resized.copy().astype(np.float32)
-        
-        # 按像素混合
+        # 将NC数据叠加到地球纹理上（优化版本）
+        # 使用OpenCV的高效混合函数
         alpha_norm = alpha_resized.astype(np.float32) / 255.0
-        for c in range(3):  # BGR三个通道
-            final_img[:, :, c] = (bgr_resized[:, :, c].astype(np.float32) * alpha_norm + 
-                                 final_img[:, :, c] * (1 - alpha_norm))
+        alpha_3ch = np.stack([alpha_norm] * 3, axis=2)  # 扩展到3通道
         
-        final_img = final_img.astype(np.uint8)
+        # 向量化混合操作，比循环快得多
+        final_img = (bgr_resized.astype(np.float32) * alpha_3ch + 
+                    earth_resized.astype(np.float32) * (1 - alpha_3ch)).astype(np.uint8)
+        
+        print(f"图像混合完成，最终尺寸: {final_img.shape}")
         
         # 编码为PNG格式
         success, img_encoded = cv2.imencode('.png', final_img)
