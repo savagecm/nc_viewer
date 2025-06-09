@@ -701,6 +701,9 @@ def get_visualization_data(variable_name):
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        # 支持im_numdeps参数（与depth_index参数等效）
+        if depth_index is None:
+            depth_index = request.args.get('im_numdeps', type=int)
         level_index = request.args.get('level', type=int)
         # 支持im_level参数（与level参数等效）
         if level_index is None:
@@ -1056,6 +1059,9 @@ def generate_visualization_image(variable_name):
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        # 支持im_numdeps参数（与depth_index参数等效）
+        if depth_index is None:
+            depth_index = request.args.get('im_numdeps', type=int)
         level_index = request.args.get('level', type=int)
         if level_index is None:
             level_index = request.args.get('im_level', type=int)
@@ -1385,6 +1391,9 @@ def get_colorbar_info(variable_name):
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        # 支持im_numdeps参数（与depth_index参数等效）
+        if depth_index is None:
+            depth_index = request.args.get('im_numdeps', type=int)
         level_index = request.args.get('level', type=int)
         # 支持im_level参数（与level参数等效）
         if level_index is None:
@@ -1522,6 +1531,9 @@ def get_visualization_info(variable_name):
         # 获取参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        # 支持im_numdeps参数（与depth_index参数等效）
+        if depth_index is None:
+            depth_index = request.args.get('im_numdeps', type=int)
         level_index = request.args.get('level', type=int)
         # 支持im_level参数（与level参数等效）
         if level_index is None:

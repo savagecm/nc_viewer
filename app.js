@@ -505,6 +505,11 @@ async function visualizeWithBackendData(variableName) {
             colorbarUrl += `&custom_colormap=${encodeURIComponent(JSON.stringify(customColormap))}`;
             console.log('Debug: 添加了custom_colormap参数');
         }
+        // 添加维度参数（层数、时间等）
+        if (dimensionParams) {
+            colorbarUrl += '&' + dimensionParams.substring(1);
+            console.log('Debug: 添加了维度参数:', dimensionParams);
+        }
         console.log('Debug: colorbarUrl =', colorbarUrl);
         const colorbarResponse = await fetch(colorbarUrl);
         if (colorbarResponse.ok) {
