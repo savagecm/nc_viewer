@@ -1195,8 +1195,13 @@ def generate_visualization_image(variable_name):
         if lon_resolution <= 0 or lat_resolution <= 0:
             return jsonify({'error': f'无效的分辨率: 经度{lon_resolution:.6f}°/像素, 纬度{lat_resolution:.6f}°/像素'}), 400
         
-        global_width = data_width#int(360 / abs(lon_resolution))
-        global_height = data_height#int(180 / abs(lat_resolution))
+        # 根据NC数据的分辨率计算全球尺寸
+        global_width = int(360 / abs(lon_resolution))
+        global_height = int(180 / abs(lat_resolution))
+        
+        # 确保全球尺寸至少不小于NC数据尺寸
+        global_width = max(global_width, data_width)
+        global_height = max(global_height, data_height)
         
         # 验证计算出的尺寸
         if global_width <= 0 or global_height <= 0:
@@ -1211,26 +1216,36 @@ def generate_visualization_image(variable_name):
         # 计算NC数据区域在调整后地球纹理中的位置
         # 统一使用[-180, 180]格式的经度映射
         x_start = int((lon_min_mapped + 180) / 360 * global_width)
-        x_end = x_start + data_width
+        x_end = x_start + int((lon_max_mapped - lon_min_mapped) / 360 * global_width)
         
         y_start = int((90 - lat_max) / 180 * global_height)
-        y_end = y_start + data_height
+        y_end = y_start + int((lat_max - lat_min) / 180 * global_height)
         
         # 确保索引在有效范围内
-        x_start = max(0, min(x_start, global_width - data_width))
-        x_end = min(x_start + data_width, global_width)
-        y_start = max(0, min(y_start, global_height - data_height))
-        y_end = min(y_start + data_height, global_height)
+        x_start = max(0, min(x_start, global_width))
+        x_end = max(x_start, min(x_end, global_width))
+        y_start = max(0, min(y_start, global_height))
+        y_end = max(y_start, min(y_end, global_height))
+        
+        # 计算实际提取的尺寸
+        extract_width = x_end - x_start
+        extract_height = y_end - y_start
         
         print(f"从调整后地球纹理中提取区域: x[{x_start}:{x_end}], y[{y_start}:{y_end}]")
+        print(f"提取尺寸: {extract_width}x{extract_height}, NC数据尺寸: {data_width}x{data_height}")
         
         # 提取对应区域
-        earth_resized = earth_resized_global[y_start:y_end, x_start:x_end]
-        
-        # 如果提取的区域尺寸不完全匹配，进行最终调整
-        if earth_resized.shape[:2] != (data_height, data_width):
-            earth_resized = cv2.resize(earth_resized, (data_width, data_height), interpolation=cv2.INTER_LINEAR)
-            print(f"最终调整地球纹理尺寸为: {data_width}x{data_height}")
+        if extract_width > 0 and extract_height > 0:
+            earth_resized = earth_resized_global[y_start:y_end, x_start:x_end]
+            
+            # 调整到NC数据的精确尺寸
+            if earth_resized.shape[:2] != (data_height, data_width):
+                earth_resized = cv2.resize(earth_resized, (data_width, data_height), interpolation=cv2.INTER_LINEAR)
+                print(f"地球纹理已调整到NC数据尺寸: {data_width}x{data_height}")
+        else:
+            # 如果提取区域无效，创建一个默认的地球纹理
+            earth_resized = cv2.resize(earth_img, (data_width, data_height), interpolation=cv2.INTER_LINEAR)
+            print(f"使用默认地球纹理，调整到NC数据尺寸: {data_width}x{data_height}")
         
         print(f"地球纹理已调整为NC数据分辨率: {earth_resized.shape[:2]}")
         print("=== 地球纹理预处理完成 ===")
