@@ -16,3 +16,5 @@ opencv-python
 # 1. 主要的可视化功能在前端实现，不需要额外的Python库
 # 2. 这些依赖项主要用于生成示例NC文件
 # 3. 如果只是运行可视化器，只需要Python的内置http.server模块
+pillow
+matplotlib

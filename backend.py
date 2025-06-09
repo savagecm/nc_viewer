@@ -1090,7 +1090,7 @@ def generate_visualization_image(variable_name):
         
         latitudes = np.array(coordinates['latitudes'])
         longitudes = np.array(coordinates['longitudes'])
-        
+        print(f"var_data.shape is {var_data.shape}")
         # 根据维度提取数据
         if len(var_data.shape) == 4:  # (time, depth, lat, lon)
             t_idx = time_index if time_index is not None else 0
