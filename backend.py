@@ -7,6 +7,7 @@
 
 from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 from flask_cors import CORS
+import matplotlib
 import netCDF4 as nc
 import numpy as np
 import os
@@ -683,17 +684,6 @@ def get_visualization_data(variable_name):
                 print("自定义颜色映射解析失败，使用默认颜色方案")
                 custom_colormap = None
         opacity = float(request.args.get('opacity', 1.0))
-        custom_colormap_str = request.args.get('custom_colormap')
-        
-        # 解析自定义颜色映射
-        custom_colormap = None
-        if custom_colormap_str:
-            try:
-                custom_colormap = json.loads(custom_colormap_str)
-                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
-            except json.JSONDecodeError as e:
-                print(f"自定义颜色映射解析失败: {e}")
-                return jsonify({'error': '自定义颜色映射格式错误'}), 400
         
         # 分页参数
         page = int(request.args.get('page', 1))
@@ -711,6 +701,10 @@ def get_visualization_data(variable_name):
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        level_index = request.args.get('level', type=int)
+        # 支持im_level参数（与level参数等效）
+        if level_index is None:
+            level_index = request.args.get('im_level', type=int)
         
         print(f"开始处理变量 {variable_name} 的可视化数据")
         print(f"颜色方案: {color_scheme}")
@@ -1035,7 +1029,7 @@ def apply_custom_colormap_vectorized(normalized_values, colormap):
 
 @app.route('/api/visualization/<variable_name>/image', methods=['GET'])
 def generate_visualization_image(variable_name):
-    """生成可视化图片，包含数据、透明度、底图和colorbar"""
+    """生成可视化图片，按照三个步骤处理：地球纹理预处理、NC数据处理、图像合成"""
     global current_nc_data
     
     if not current_nc_data:
@@ -1058,32 +1052,20 @@ def generate_visualization_image(variable_name):
             except json.JSONDecodeError:
                 print("自定义颜色映射解析失败，使用默认颜色方案")
                 custom_colormap = None
-        opacity = float(request.args.get('opacity', 1.0))
-        custom_colormap_str = request.args.get('custom_colormap')
-        
-        # 解析自定义颜色映射
-        custom_colormap = None
-        if custom_colormap_str:
-            try:
-                custom_colormap = json.loads(custom_colormap_str)
-                print(f"使用自定义颜色映射，包含 {len(custom_colormap)} 个颜色点")
-            except json.JSONDecodeError as e:
-                print(f"自定义颜色映射解析失败: {e}")
-                return jsonify({'error': '自定义颜色映射格式错误'}), 400
-        
-        # 注意：图片尺寸将完全基于NC数据的网格大小，忽略URL中的width和height参数
         
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        level_index = request.args.get('level', type=int)
+        if level_index is None:
+            level_index = request.args.get('im_level', type=int)
         
         print(f"生成变量 {variable_name} 的可视化图片")
         print(f"参数: 颜色方案={color_scheme}")
+        print(f"层级参数: time_index={time_index}, depth_index={depth_index}, level_index={level_index}")
         
-        # 获取变量数据
+        # 获取变量数据和坐标信息
         var_data = current_nc_data.variables[variable_name]
-        
-        # 获取坐标信息
         coordinates = extract_coordinates(current_nc_data)
         if not coordinates:
             return jsonify({'error': '无法提取坐标信息'}), 400
@@ -1092,39 +1074,72 @@ def generate_visualization_image(variable_name):
         longitudes = np.array(coordinates['longitudes'])
         print(f"var_data.shape is {var_data.shape}")
         # 根据维度提取数据
-        if len(var_data.shape) == 4:  # (time, depth, lat, lon)
+        if len(var_data.shape) == 4:  # (time, depth/level, lat, lon)
             t_idx = time_index if time_index is not None else 0
-            d_idx = depth_index if depth_index is not None else 0
+            d_idx = level_index if level_index is not None else (depth_index if depth_index is not None else 0)
             data = var_data[t_idx, d_idx, :, :]
+            print(f"提取4D数据: time_index={t_idx}, level/depth_index={d_idx}")
         elif len(var_data.shape) == 3:
             if time_index is not None:
                 data = var_data[time_index, :, :]
+                print(f"提取3D数据: time_index={time_index}")
+            elif level_index is not None:
+                data = var_data[level_index, :, :]
+                print(f"提取3D数据: level_index={level_index}")
             elif depth_index is not None:
                 data = var_data[depth_index, :, :]
+                print(f"提取3D数据: depth_index={depth_index}")
             else:
                 data = var_data[0, :, :]
+                print("提取3D数据: 使用默认索引0")
         elif len(var_data.shape) == 2:  # (lat, lon)
             data = var_data[:, :]
+            print("提取2D数据")
         else:
             return jsonify({'error': f'不支持的数据维度: {var_data.shape}'}), 400
         
-        # 根据数据的实际经纬度维度设置图片尺寸
-        # 每个数据点对应一个像素点，不使用用户传入的尺寸参数
-        data_height, data_width = data.shape  # lat, lon
-        width = data_width   # 经度方向
-        height = data_height # 纬度方向
-            
-        print(f"数据维度: {data_height}x{data_width} (纬度x经度)")
-        print(f"输出图片尺寸: {width}x{height} (1:1像素映射)")
-        
-        # 转换为numpy数组并处理异常值
+        # 转换为numpy数组并翻转纬度方向
         data = np.array(data)
-        
-        # 沿着纬度方向翻转数据（通常NC文件的纬度是从北到南，需要翻转为从南到北）
-        data = np.flipud(data)
+        data = np.flipud(data)  # NC文件纬度通常从北到南，翻转为从南到北
         print(f"数据已沿纬度方向翻转")
         
-        # 处理 masked array 和 NaN 值
+        # 获取数据维度和经纬度范围
+        data_height, data_width = data.shape  # lat, lon
+        latitudes = np.flipud(latitudes)  # 对应数据翻转
+        
+        lat_min, lat_max = float(np.min(latitudes)), float(np.max(latitudes))
+        lon_min, lon_max = float(np.min(longitudes)), float(np.max(longitudes))
+        
+        # 处理经度范围：统一转换为[-180, 180]格式
+        if lon_min >= 0 and lon_max > 180:
+            # 将[0, 360]格式转换为[-180, 180]格式
+            # 对于经度数据，需要重新排列数据
+            longitudes_mapped = np.where(longitudes > 180, longitudes - 360, longitudes)
+            
+            # 如果数据跨越了180度经线，需要重新排列数据
+            if np.any(longitudes > 180):
+                # 找到180度的分界点
+                split_idx = np.where(longitudes > 180)[0][0]
+                
+                # 重新排列经度数组
+                longitudes = np.concatenate([longitudes[split_idx:] - 360, longitudes[:split_idx]])
+                
+                # 重新排列数据数组（沿经度维度）
+                data = np.concatenate([data[:, split_idx:], data[:, :split_idx]], axis=1)
+                
+                print(f"数据已重新排列以适应[-180, 180]经度格式")
+            
+            lon_min_mapped = float(np.min(longitudes))
+            lon_max_mapped = float(np.max(longitudes))
+            print(f"经度范围从[{lon_min:.2f}, {lon_max:.2f}]转换为[{lon_min_mapped:.2f}, {lon_max_mapped:.2f}]")
+        else:
+            lon_min_mapped = lon_min
+            lon_max_mapped = lon_max
+        
+        print(f"数据维度: {data_height}x{data_width} (纬度x经度)")
+        print(f"数据地理范围: 纬度[{lat_min:.2f}, {lat_max:.2f}], 经度[{lon_min_mapped:.2f}, {lon_max_mapped:.2f}]")
+        
+        # 处理数据异常值和掩码
         if hasattr(data, 'mask'):
             valid_mask = ~data.mask
             data = data.data
@@ -1133,51 +1148,25 @@ def generate_visualization_image(variable_name):
         
         # 过滤异常值
         finite_mask = np.isfinite(data)
-        valid_mask = valid_mask & finite_mask
-        
-        # 应用绝对值上限过滤（10^10）
-        absolute_limit = 1e10
-        absolute_mask = np.abs(data) <= absolute_limit
-        valid_mask = valid_mask & absolute_mask
-        
-        if np.any(valid_mask):
-            valid_data = data[valid_mask]
-            
-    
-            
-         
+        absolute_mask = np.abs(data) <= 1e10
+        valid_mask = valid_mask & finite_mask & absolute_mask
         
         if not np.any(valid_mask):
             return jsonify({'error': '没有有效的数据点'}), 400
         
-        # 优化数据处理：直接使用有效数据计算范围，避免不必要的复制
+        # 计算数据范围
         valid_data = data[valid_mask]
         data_min = np.min(valid_data)
         data_max = np.max(valid_data)
-        
-        # 只在需要时创建过滤后的数据数组
-        data_filtered = data.astype(float, copy=False)  # 避免不必要的复制
-        data_filtered = np.where(valid_mask, data_filtered, np.nan)  # 向量化操作
-        
         print(f"数据范围: [{data_min:.6f}, {data_max:.6f}]")
         
-        # 获取数据的实际经纬度范围
-        coordinates = extract_coordinates(current_nc_data)
-        if not coordinates:
-            raise Exception('无法提取坐标信息')
+        # 创建过滤后的数据数组
+        data_filtered = np.where(valid_mask, data.astype(float), np.nan)
         
-        latitudes = np.array(coordinates['latitudes'])
-        longitudes = np.array(coordinates['longitudes'])
+        # === 步骤1: 地球纹理预处理 ===
+        print("\n=== 步骤1: 地球纹理预处理 ===")
         
-        # 如果数据被翻转了，纬度也需要相应调整
-        latitudes = np.flipud(latitudes)
-        
-        lat_min, lat_max = float(np.min(latitudes)), float(np.max(latitudes))
-        lon_min, lon_max = float(np.min(longitudes)), float(np.max(longitudes))
-        
-        print(f"数据地理范围: 纬度[{lat_min:.2f}, {lat_max:.2f}], 经度[{lon_min:.2f}, {lon_max:.2f}]")
-        
-        # 加载地球底图（使用缓存优化）
+        # 加载地球纹理
         earth_texture_path = os.path.join(os.path.dirname(__file__), 'cesium', 'Assets', 'Textures', 'earth_8k.jpg')
         if not os.path.exists(earth_texture_path):
             raise Exception(f"找不到地球纹理文件: {earth_texture_path}")
@@ -1194,131 +1183,156 @@ def generate_visualization_image(variable_name):
             print("使用缓存的地球纹理")
         
         earth_img = _earth_texture_cache
-        
-        # 地球纹理的尺寸和地理范围
         earth_height, earth_width = earth_img.shape[:2]
+        print(f"原始地球纹理尺寸: {earth_width}x{earth_height}")
         
-        # 计算数据区域在地球纹理中的像素位置
-        # 地球纹理覆盖全球：经度[-180, 180]，纬度[-90, 90]
-        # 注意：图片的Y轴是从上到下，对应纬度从90到-90
+        # 计算NC数据的经纬度分辨率
+        lat_resolution = (lat_max - lat_min) / data_height
+        lon_resolution = (lon_max_mapped - lon_min_mapped) / data_width
+        print(f"NC数据分辨率: 纬度{lat_resolution:.6f}°/像素, 经度{lon_resolution:.6f}°/像素")
         
-        # 经度映射：[-180, 180] -> [0, earth_width]
-        x_start = int((lon_min + 180) / 360 * earth_width)
-        x_end = int((lon_max + 180) / 360 * earth_width)
+        # 计算全球在此分辨率下的尺寸
+        if lon_resolution <= 0 or lat_resolution <= 0:
+            return jsonify({'error': f'无效的分辨率: 经度{lon_resolution:.6f}°/像素, 纬度{lat_resolution:.6f}°/像素'}), 400
         
-        # 纬度映射：[90, -90] -> [0, earth_height]
-        y_start = int((90 - lat_max) / 180 * earth_height)
-        y_end = int((90 - lat_min) / 180 * earth_height)
+        global_width = data_width#int(360 / abs(lon_resolution))
+        global_height = data_height#int(180 / abs(lat_resolution))
+        
+        # 验证计算出的尺寸
+        if global_width <= 0 or global_height <= 0:
+            return jsonify({'error': f'计算出的全球尺寸无效: {global_width}x{global_height}'}), 400
+        
+        print(f"全球在NC分辨率下的尺寸: {global_width}x{global_height}")
+        
+        # 将地球纹理调整到NC数据的分辨率
+        earth_resized_global = cv2.resize(earth_img, (global_width, global_height), interpolation=cv2.INTER_LINEAR)
+        print(f"地球纹理已调整到NC分辨率: {global_width}x{global_height}")
+        
+        # 计算NC数据区域在调整后地球纹理中的位置
+        # 统一使用[-180, 180]格式的经度映射
+        x_start = int((lon_min_mapped + 180) / 360 * global_width)
+        x_end = x_start + data_width
+        
+        y_start = int((90 - lat_max) / 180 * global_height)
+        y_end = y_start + data_height
         
         # 确保索引在有效范围内
-        x_start = max(0, min(x_start, earth_width - 1))
-        x_end = max(x_start + 1, min(x_end, earth_width))
-        y_start = max(0, min(y_start, earth_height - 1))
-        y_end = max(y_start + 1, min(y_end, earth_height))
+        x_start = max(0, min(x_start, global_width - data_width))
+        x_end = min(x_start + data_width, global_width)
+        y_start = max(0, min(y_start, global_height - data_height))
+        y_end = min(y_start + data_height, global_height)
         
-        print(f"地球纹理裁剪区域: x[{x_start}:{x_end}], y[{y_start}:{y_end}]")
+        print(f"从调整后地球纹理中提取区域: x[{x_start}:{x_end}], y[{y_start}:{y_end}]")
         
-        # 从地球纹理中提取对应区域
-        earth_region = earth_img[y_start:y_end, x_start:x_end]
+        # 提取对应区域
+        earth_resized = earth_resized_global[y_start:y_end, x_start:x_end]
         
-        # 调整提取的区域大小到数据尺寸
-        earth_resized = cv2.resize(earth_region, (width, height), interpolation=cv2.INTER_LINEAR)
+        # 如果提取的区域尺寸不完全匹配，进行最终调整
+        if earth_resized.shape[:2] != (data_height, data_width):
+            earth_resized = cv2.resize(earth_resized, (data_width, data_height), interpolation=cv2.INTER_LINEAR)
+            print(f"最终调整地球纹理尺寸为: {data_width}x{data_height}")
+        
+        print(f"地球纹理已调整为NC数据分辨率: {earth_resized.shape[:2]}")
+        print("=== 地球纹理预处理完成 ===")
+        
+        # === 步骤2: 处理NC数据并生成彩色图像 ===
+        print("\n=== 步骤2: 处理NC数据并生成彩色图像 ===")
         
         # 处理颜色方案映射
         color_scheme_mapping = {
-            'grayscale': 'gray',  # 将grayscale映射到matplotlib的gray
-            'grey': 'gray',       # 统一使用gray
-            'greys': 'Greys'      # 大写版本
+            'grayscale': 'gray',
+            'grey': 'gray',
+            'greys': 'Greys'
         }
-        
-        # 如果是自定义的颜色方案名称，映射到matplotlib支持的名称
         mapped_scheme = color_scheme_mapping.get(color_scheme, color_scheme)
         
-        # 标准化数据到0-1范围（忽略NaN值）
-        print(f"Normalize数据范围: [{data_min:.6f}, {data_max:.6f}]")
+        # 标准化数据到0-1范围
+        print(f"标准化数据范围: [{data_min:.6f}, {data_max:.6f}]")
         norm = Normalize(vmin=data_min, vmax=data_max)
         
-        # 创建一个副本用于归一化，保持NaN值不变
         normalized_data = np.full_like(data_filtered, np.nan)
-        
-        # 只对有效数据进行归一化
         valid_data_mask = ~np.isnan(data_filtered)
         if np.any(valid_data_mask):
             normalized_data[valid_data_mask] = norm(data_filtered[valid_data_mask])
-            print(f"归一化了 {np.sum(valid_data_mask)} 个有效数据点，忽略了 {np.sum(~valid_data_mask)} 个NaN值")
+            print(f"归一化了 {np.sum(valid_data_mask)} 个有效数据点")
         
-        # 应用颜色映射（支持自定义颜色映射）
+        # 应用颜色映射
         if custom_colormap and color_scheme == 'custom':
-            print(f"使用自定义颜色映射生成图像（向量化优化版本）")
-            # 创建RGB数组
+            print("使用自定义颜色映射")
             colored_data = np.zeros((normalized_data.shape[0], normalized_data.shape[1], 4), dtype=np.float32)
-            
-            # 向量化处理自定义颜色映射
             valid_mask = ~np.isnan(normalized_data)
             if np.any(valid_mask):
-                # 提取有效数据
                 valid_values = normalized_data[valid_mask]
-                
-                # 向量化应用自定义颜色映射
                 rgb_colors = apply_custom_colormap_vectorized(valid_values, custom_colormap)
-                
-                # 将结果分配回原始数组
                 colored_data[valid_mask, 0] = rgb_colors[:, 0] / 255.0  # R
                 colored_data[valid_mask, 1] = rgb_colors[:, 1] / 255.0  # G
                 colored_data[valid_mask, 2] = rgb_colors[:, 2] / 255.0  # B
                 colored_data[valid_mask, 3] = 1.0  # A
-                
-                print(f"向量化处理了 {len(valid_values)} 个有效数据点")
         else:
-            # 获取matplotlib colormap
             try:
                 cmap = cm.get_cmap(mapped_scheme)
             except ValueError:
                 print(f"警告: 颜色方案 '{color_scheme}' 不支持，使用默认的 'viridis'")
                 cmap = cm.get_cmap('viridis')
-            
-            # 应用colormap（NaN值会被colormap自动处理为透明或特殊颜色）
             colored_data = cmap(normalized_data)
         
         # 转换为OpenCV格式 (BGR, 0-255)
-        # matplotlib colormap输出RGBA，需要转换为BGR
         bgr_data = colored_data[:, :, [2, 1, 0]]  # RGBA -> BGR
         bgr_data = (bgr_data * 255).astype(np.uint8)
         
         # 创建alpha通道，NaN值为完全透明
         alpha_channel = np.ones((data_filtered.shape[0], data_filtered.shape[1]), dtype=np.uint8) * 255
         nan_mask = np.isnan(data_filtered)
-        alpha_channel[nan_mask] = 0  # NaN值设为完全透明
+        alpha_channel[nan_mask] = 0
         
-        # 移除用户设置的透明度功能，只保留NaN值的透明处理
+        print(f"NC数据彩色图像生成完成: {bgr_data.shape}")
+        print("=== NC数据处理完成 ===")
         
-        # 调整数据图片大小以匹配目标尺寸
-        bgr_resized = cv2.resize(bgr_data, (width, height), interpolation=cv2.INTER_LINEAR)
-        alpha_resized = cv2.resize(alpha_channel, (width, height), interpolation=cv2.INTER_LINEAR)
+        # === 步骤3: 图像合成生成最终结果 ===
+        print("\n=== 步骤3: 图像合成生成最终结果 ===")
         
-        # 将NC数据叠加到地球纹理上（优化版本）
-        # 使用OpenCV的高效混合函数
-        alpha_norm = alpha_resized.astype(np.float32) / 255.0
-        alpha_3ch = np.stack([alpha_norm] * 3, axis=2)  # 扩展到3通道
+        # 确保两个图像尺寸一致
+        if bgr_data.shape[:2] != earth_resized.shape[:2]:
+            print(f"调整图像尺寸匹配: {bgr_data.shape[:2]} -> {earth_resized.shape[:2]}")
+            bgr_data = cv2.resize(bgr_data, (earth_resized.shape[1], earth_resized.shape[0]), interpolation=cv2.INTER_LINEAR)
+            alpha_channel = cv2.resize(alpha_channel, (earth_resized.shape[1], earth_resized.shape[0]), interpolation=cv2.INTER_LINEAR)
         
-        # 向量化混合操作，比循环快得多
-        final_img = (bgr_resized.astype(np.float32) * alpha_3ch + 
+        # 图像混合
+        alpha_norm = alpha_channel.astype(np.float32) / 255.0
+        alpha_3ch = np.stack([alpha_norm] * 3, axis=2)
+        print(f"图像混合，使用alpha通道: {alpha_3ch.shape}")
+        # bgr_data alpha_3ch转化为图片并保存
+        cv2.imwrite('bgr_data.png', bgr_data)
+        cv2.imwrite('alpha_3ch.png', alpha_3ch)
+        cv2.imwrite('earth_resized.png', earth_resized)
+        final_img = (bgr_data.astype(np.float32) * alpha_3ch + 
                     earth_resized.astype(np.float32) * (1 - alpha_3ch)).astype(np.uint8)
-        
-        print(f"图像混合完成，最终尺寸: {final_img.shape}")
+        cv2.imwrite('final_img.png', final_img)
+        print(f"图像合成完成，最终尺寸: {final_img.shape}")
+        print("=== 所有步骤完成 ===")
         
         # 编码为PNG格式
         success, img_encoded = cv2.imencode('.png', final_img)
         if not success:
             raise Exception("无法编码图片为PNG格式")
         
-        # 创建BytesIO对象
-        img_buffer = io.BytesIO(img_encoded.tobytes())
+        # 转换为base64编码
+        import base64
+        img_base64 = base64.b64encode(img_encoded.tobytes()).decode('utf-8')
         
-        img_buffer.seek(0)
+        # 获取图片分辨率
+        img_height, img_width = final_img.shape[:2]
         
-        # 返回图片
-        return send_file(img_buffer, mimetype='image/png')
+        # 返回JSON格式，包含图片数据和分辨率信息
+        return jsonify({
+            'image_data': f'data:image/png;base64,{img_base64}',
+            'width': int(img_width),
+            'height': int(img_height),
+            'data_width': int(data_width),
+            'data_height': int(data_height),
+            'longitude_range': [float(lon_min_mapped), float(lon_max_mapped)],
+            'latitude_range': [float(lat_min), float(lat_max)]
+        })
         
     except Exception as e:
         print(f"生成可视化图片时出错: {str(e)}")
@@ -1356,19 +1370,31 @@ def get_colorbar_info(variable_name):
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        level_index = request.args.get('level', type=int)
+        # 支持im_level参数（与level参数等效）
+        if level_index is None:
+            level_index = request.args.get('im_level', type=int)
         
         # 根据维度提取数据（与图片生成函数保持一致）
         if len(var_data.shape) == 4:  # (time, depth, lat, lon)
             t_idx = time_index if time_index is not None else 0
-            d_idx = depth_index if depth_index is not None else 0
+            # 优先使用level_index，其次是depth_index
+            d_idx = level_index if level_index is not None else (depth_index if depth_index is not None else 0)
             data = var_data[t_idx, d_idx, :, :]
+            print(f"提取4D数据: time_index={t_idx}, level/depth_index={d_idx}")
         elif len(var_data.shape) == 3:
             if time_index is not None:
                 data = var_data[time_index, :, :]
+                print(f"提取3D数据: time_index={time_index}")
+            elif level_index is not None:
+                data = var_data[level_index, :, :]
+                print(f"提取3D数据: level_index={level_index}")
             elif depth_index is not None:
                 data = var_data[depth_index, :, :]
+                print(f"提取3D数据: depth_index={depth_index}")
             else:
                 data = var_data[0, :, :]
+                print("提取3D数据: 使用默认索引0")
         elif len(var_data.shape) == 2:  # (lat, lon)
             data = var_data[:, :]
         else:
@@ -1481,6 +1507,10 @@ def get_visualization_info(variable_name):
         # 获取参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
+        level_index = request.args.get('level', type=int)
+        # 支持im_level参数（与level参数等效）
+        if level_index is None:
+            level_index = request.args.get('im_level', type=int)
         
         # 获取变量数据
         var_data = current_nc_data.variables[variable_name]
@@ -1493,20 +1523,29 @@ def get_visualization_info(variable_name):
         latitudes = np.array(coordinates['latitudes'])
         longitudes = np.array(coordinates['longitudes'])
         
-        # 根据维度提取数据
-        if len(var_data.shape) == 4:  # (time, depth, lat, lon)
+        # 根据维度提取数据（支持level参数）
+        if len(var_data.shape) == 4:  # (time, depth/level, lat, lon)
             t_idx = time_index if time_index is not None else 0
-            d_idx = depth_index if depth_index is not None else 0
+            # 优先使用level_index，其次是depth_index
+            d_idx = level_index if level_index is not None else (depth_index if depth_index is not None else 0)
             data = var_data[t_idx, d_idx, :, :]
+            print(f"提取4D数据: time_index={t_idx}, level/depth_index={d_idx}")
         elif len(var_data.shape) == 3:
             if time_index is not None:
                 data = var_data[time_index, :, :]
+                print(f"提取3D数据: time_index={time_index}")
+            elif level_index is not None:
+                data = var_data[level_index, :, :]
+                print(f"提取3D数据: level_index={level_index}")
             elif depth_index is not None:
                 data = var_data[depth_index, :, :]
+                print(f"提取3D数据: depth_index={depth_index}")
             else:
                 data = var_data[0, :, :]
+                print("提取3D数据: 使用默认索引0")
         elif len(var_data.shape) == 2:  # (lat, lon)
             data = var_data[:, :]
+            print("提取2D数据")
         else:
             return jsonify({'error': f'不支持的数据维度: {var_data.shape}'}), 400
         

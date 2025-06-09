@@ -354,37 +354,50 @@ async function visualizeWithBackendData(variableName) {
         
         console.log('请求图片URL:', imageUrl);
         
-        // 获取数据边界信息
-        let infoUrl = `${API_BASE}/visualization/${variableName}/info`;
-        if (dimensionParams) {
-            infoUrl += '?' + dimensionParams.substring(1);
+        // 获取图片数据和分辨率信息
+        const imageResponse = await fetch(imageUrl);
+        if (!imageResponse.ok) {
+            const errorData = await imageResponse.json();
+            throw new Error(errorData.error || `HTTP错误 ${imageResponse.status}`);
         }
         
-        const infoResponse = await fetch(infoUrl);
-        if (!infoResponse.ok) {
-            const errorData = await infoResponse.json();
-            throw new Error(errorData.error || `HTTP错误 ${infoResponse.status}`);
+        const imageData = await imageResponse.json();
+        console.log('图片数据信息:', {
+            width: imageData.width,
+            height: imageData.height,
+            data_width: imageData.data_width,
+            data_height: imageData.data_height,
+            longitude_range: imageData.longitude_range,
+            latitude_range: imageData.latitude_range
+        });
+        
+        // 使用base64图片数据
+        const base64ImageUrl = imageData.image_data;
+        
+        // 验证base64数据
+        if (!base64ImageUrl || !base64ImageUrl.startsWith('data:image/png;base64,')) {
+            throw new Error('无效的图片数据格式: ' + (base64ImageUrl ? base64ImageUrl.substring(0, 50) : 'null'));
         }
         
-        const dataInfo = await infoResponse.json();
-        if (!dataInfo.success) {
-            throw new Error(dataInfo.error || '获取数据信息失败');
+        console.log('Base64图片数据长度:', base64ImageUrl.length);
+        console.log('Base64图片数据前缀:', base64ImageUrl.substring(0, 50));
+        
+        // 直接使用HTTP响应中的latitude_range和longitude_range构建空间范围
+        if (!imageData.latitude_range || !imageData.longitude_range) {
+            throw new Error('缺少纬度或经度范围数据');
         }
         
-        console.log('数据信息:', dataInfo);
-        
-        // 验证空间范围数据并处理字段名映射
-        const rawExtent = dataInfo.spatial_extent;
-        if (!rawExtent) {
-            throw new Error('缺少空间范围数据');
+        if (!Array.isArray(imageData.latitude_range) || imageData.latitude_range.length !== 2 ||
+            !Array.isArray(imageData.longitude_range) || imageData.longitude_range.length !== 2) {
+            throw new Error('纬度或经度范围数据格式错误');
         }
         
-        // 处理字段名映射：后端可能返回lat_max/lat_min/lon_max/lon_min格式
+        // 使用HTTP响应中的latitude_range和longitude_range
         const extent = {
-            min_lon: rawExtent.min_lon || rawExtent.lon_min,
-            max_lon: rawExtent.max_lon || rawExtent.lon_max,
-            min_lat: rawExtent.min_lat || rawExtent.lat_min,
-            max_lat: rawExtent.max_lat || rawExtent.lat_max
+            min_lat: imageData.latitude_range[0],
+            max_lat: imageData.latitude_range[1],
+            min_lon: imageData.longitude_range[0],
+            max_lon: imageData.longitude_range[1]
         };
         
         if (typeof extent.min_lon !== 'number' || 
@@ -393,27 +406,27 @@ async function visualizeWithBackendData(variableName) {
             typeof extent.max_lat !== 'number' ||
             isNaN(extent.min_lon) || isNaN(extent.min_lat) || 
             isNaN(extent.max_lon) || isNaN(extent.max_lat)) {
-            throw new Error('无效的空间范围数据: ' + JSON.stringify(rawExtent));
+            throw new Error('无效的空间范围数据: ' + JSON.stringify({latitude_range: imageData.latitude_range, longitude_range: imageData.longitude_range}));
         }
         
-        console.log('验证通过的空间范围:', extent);
+        console.log('使用HTTP响应的空间范围:', extent);
 
         // 添加图片图层 - 使用Entity和Rectangle方式
         try {
             // 先预加载图片，确保图片能正确加载
-            console.log('开始预加载图片:', imageUrl);
+            console.log('开始预加载图片:', base64ImageUrl.substring(0, 50) + '...');
             const imageLoadPromise = new Promise((resolve, reject) => {
                 const img = new Image();
                 img.crossOrigin = 'anonymous';
                 img.onload = () => {
-                    console.log('图片预加载成功');
+                    console.log('图片预加载成功，尺寸:', img.width, 'x', img.height);
                     resolve(img);
                 };
                 img.onerror = (error) => {
                     console.error('图片预加载失败:', error);
-                    reject(new Error('图片加载失败: ' + imageUrl));
+                    reject(new Error('图片加载失败'));
                 };
-                img.src = imageUrl;
+                img.src = base64ImageUrl;
             });
             
             // 等待图片加载完成
@@ -422,10 +435,11 @@ async function visualizeWithBackendData(variableName) {
             // 创建数据源
             const dataSource = new Cesium.CustomDataSource('ncImageData');
             await viewer.dataSources.add(dataSource);
-            
+            // 打印min_lon, min_lat, max_lon, max_lat
+            console.log('空间范围:', extent.min_lon, extent.min_lat, extent.max_lon, extent.max_lat);
             // 使用ImageryLayer方式显示图片
             const imageryProvider = new Cesium.SingleTileImageryProvider({
-                url: imageUrl,
+                url: base64ImageUrl,
                 rectangle: Cesium.Rectangle.fromDegrees(
                     extent.min_lon,
                     extent.min_lat,
@@ -446,8 +460,11 @@ async function visualizeWithBackendData(variableName) {
             }
             
             console.log('图片图层添加成功:', {
-                url: imageUrl,
-                spatial_extent: dataInfo.spatial_extent,
+                image_size: `${imageData.width}x${imageData.height}`,
+                data_size: `${imageData.data_width}x${imageData.data_height}`,
+                longitude_range: imageData.longitude_range,
+                latitude_range: imageData.latitude_range,
+                spatial_extent: extent,
                 // 移除透明度设置，使用默认值
                 layerIndex: viewer.imageryLayers.indexOf(imageryLayer),
                 totalLayers: viewer.imageryLayers.length
@@ -501,7 +518,7 @@ async function visualizeWithBackendData(variableName) {
                 currentVariable = {
                     name: variableName,
                     stats: colorbarData.data_range,
-                    metadata: dataInfo.metadata
+                    spatial_extent: extent
                 };
             }
         }
