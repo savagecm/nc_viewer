@@ -891,27 +891,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // 其他事件监听器
     document.getElementById('visualizeVariable').addEventListener('click', visualizeVariable);
     
-    // 更新颜色条按钮事件
-     document.getElementById('updateColorbar').addEventListener('click', function() {
-         if (!currentVariable || !currentVariable.name) {
-             alert('请先选择并可视化一个变量');
-             return;
-         }
-         
-         const minValue = parseFloat(document.getElementById('minValue').value);
-         const maxValue = parseFloat(document.getElementById('maxValue').value);
-         
-         if (isNaN(minValue) || isNaN(maxValue) || minValue >= maxValue) {
-             alert('请输入有效的最小值和最大值（最小值必须小于最大值）');
-             return;
-         }
-         
-         // 更新颜色条
-         createColorbar(minValue, maxValue);
-         
-         // 重新渲染Cesium数据点
-         updateCesiumDataColors(minValue, maxValue);
-     });
+    // 菜单切换功能
+    document.getElementById('menuToggle').addEventListener('click', function() {
+        const toolbar = document.getElementById('toolbar');
+        const menuToggle = document.getElementById('menuToggle');
+        
+        toolbar.classList.toggle('hidden');
+        menuToggle.classList.toggle('active');
+    });
     
     // 更新Cesium数据点颜色
     function updateCesiumDataColors(minValue, maxValue) {

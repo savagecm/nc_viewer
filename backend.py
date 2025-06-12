@@ -1056,6 +1056,9 @@ def generate_visualization_image(variable_name):
                 print("自定义颜色映射解析失败，使用默认颜色方案")
                 custom_colormap = None
         
+        # 获取透明度参数
+        opacity = float(request.args.get('opacity', 1.0))
+        
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
         depth_index = request.args.get('depth_index', type=int)
@@ -1318,14 +1321,16 @@ def generate_visualization_image(variable_name):
             bgr_data = cv2.resize(bgr_data, (earth_resized.shape[1], earth_resized.shape[0]), interpolation=cv2.INTER_LINEAR)
             alpha_channel = cv2.resize(alpha_channel, (earth_resized.shape[1], earth_resized.shape[0]), interpolation=cv2.INTER_LINEAR)
         
-        # 图像混合
+        # 图像混合，应用透明度参数
         alpha_norm = alpha_channel.astype(np.float32) / 255.0
+        # 应用opacity参数到alpha通道
+        alpha_norm = alpha_norm * opacity
         alpha_3ch = np.stack([alpha_norm] * 3, axis=2)
-        print(f"图像混合，使用alpha通道: {alpha_3ch.shape}")
+        print(f"图像混合，使用alpha通道: {alpha_3ch.shape}，透明度: {opacity}")
  
         final_img = (bgr_data.astype(np.float32) * alpha_3ch + 
                     earth_resized.astype(np.float32) * (1 - alpha_3ch)).astype(np.uint8)
-        cv2.imwrite('final_img.png', final_img)
+        #cv2.imwrite('final_img.png', final_img)
         print(f"图像合成完成，最终尺寸: {final_img.shape}")
         print("=== 所有步骤完成 ===")
         
