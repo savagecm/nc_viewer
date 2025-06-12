@@ -409,8 +409,8 @@ async function visualizeWithBackendData(variableName) {
         // 使用base64图片数据
         const base64ImageUrl = imageData.image_data;
         
-        // 验证base64数据
-        if (!base64ImageUrl || !base64ImageUrl.startsWith('data:image/png;base64,')) {
+        // 验证base64数据（支持PNG和BMP格式）
+        if (!base64ImageUrl || (!base64ImageUrl.startsWith('data:image/png;base64,') && !base64ImageUrl.startsWith('data:image/bmp;base64,'))) {
             throw new Error('无效的图片数据格式: ' + (base64ImageUrl ? base64ImageUrl.substring(0, 50) : 'null'));
         }
         
@@ -480,10 +480,17 @@ async function visualizeWithBackendData(variableName) {
                     extent.min_lat,
                     extent.max_lon,
                     extent.max_lat
-                )
+                ),
+                maximumLevel: 18,  // 设置最大缩放级别以保持图像分辨率
+                minimumLevel: 0    // 设置最小缩放级别
             });
             
             const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
+            
+            // 设置纹理过滤为NEAREST以保持原始图像分辨率，避免线性插值导致的模糊
+            imageryLayer.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
+            imageryLayer.minificationFilter = Cesium.TextureMinificationFilter.NEAREST;
+            
             // 设置透明度，让NC数据图层能够正确显示
             imageryLayer.alpha = parseFloat(document.getElementById('opacity').value) || 1.0;
             imageryLayer.show = true;

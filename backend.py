@@ -1322,20 +1322,17 @@ def generate_visualization_image(variable_name):
         alpha_norm = alpha_channel.astype(np.float32) / 255.0
         alpha_3ch = np.stack([alpha_norm] * 3, axis=2)
         print(f"图像混合，使用alpha通道: {alpha_3ch.shape}")
-        # bgr_data alpha_3ch转化为图片并保存
-        cv2.imwrite('bgr_data.png', bgr_data)
-        cv2.imwrite('alpha_3ch.png', alpha_3ch)
-        cv2.imwrite('earth_resized.png', earth_resized)
+ 
         final_img = (bgr_data.astype(np.float32) * alpha_3ch + 
                     earth_resized.astype(np.float32) * (1 - alpha_3ch)).astype(np.uint8)
         cv2.imwrite('final_img.png', final_img)
         print(f"图像合成完成，最终尺寸: {final_img.shape}")
         print("=== 所有步骤完成 ===")
         
-        # 编码为PNG格式
-        success, img_encoded = cv2.imencode('.png', final_img)
+        # 编码为BMP格式（无损压缩）
+        success, img_encoded = cv2.imencode('.bmp', final_img)
         if not success:
-            raise Exception("无法编码图片为PNG格式")
+            raise Exception("无法编码图片为BMP格式")
         
         # 转换为base64编码
         import base64
@@ -1346,7 +1343,7 @@ def generate_visualization_image(variable_name):
         
         # 返回JSON格式，包含图片数据和分辨率信息
         return jsonify({
-            'image_data': f'data:image/png;base64,{img_base64}',
+            'image_data': f'data:image/bmp;base64,{img_base64}',
             'width': int(img_width),
             'height': int(img_height),
             'data_width': int(data_width),
