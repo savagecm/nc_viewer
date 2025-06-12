@@ -63,6 +63,41 @@ function initializeCesium() {
         // 启用深度测试
         viewer.scene.globe.depthTestAgainstTerrain = false;
         
+        // 禁用地球大气效果，避免3D视图灰蒙蒙
+        viewer.scene.skyAtmosphere.show = false;
+        viewer.scene.globe.showGroundAtmosphere = false;
+        
+        // 设置地球表面材质为更清晰的显示
+        viewer.scene.globe.enableLighting = false;
+        
+        // 添加场景模式变化监听器，确保在2D/3D切换时保持图层透明度
+        viewer.scene.morphComplete.addEventListener(function() {
+            console.log('场景模式切换完成，重新应用图层设置');
+            
+            // 确保大气效果在3D模式下也被禁用
+            viewer.scene.skyAtmosphere.show = false;
+            viewer.scene.globe.showGroundAtmosphere = false;
+            viewer.scene.globe.enableLighting = false;
+            
+            // 重新应用NC数据图层的透明度
+            if (viewer.imageryLayers.length > 1) {
+                const ncDataLayer = viewer.imageryLayers.get(viewer.imageryLayers.length - 1);
+                if (ncDataLayer && ncDataLayer.imageryProvider.constructor.name === 'SingleTileImageryProvider') {
+                    const currentOpacity = parseFloat(document.getElementById('opacity').value) || 1.0;
+                    ncDataLayer.alpha = currentOpacity;
+                    ncDataLayer.show = true;
+                    console.log('已重新应用NC数据图层透明度:', currentOpacity);
+                }
+            }
+            
+            // 确保基础地图层显示
+            const baseLayer = viewer.imageryLayers.get(0);
+            if (baseLayer) {
+                baseLayer.show = true;
+                baseLayer.alpha = 1.0;
+            }
+        });
+        
         // 确保底图显示
         const baseLayer = viewer.imageryLayers.get(0);
         if (baseLayer) {
@@ -449,15 +484,13 @@ async function visualizeWithBackendData(variableName) {
             });
             
             const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
-            // 移除透明度设置，使用默认值
+            // 设置透明度，让NC数据图层能够正确显示
+            imageryLayer.alpha = parseFloat(document.getElementById('opacity').value) || 1.0;
             imageryLayer.show = true;
             
             // 确保NC数据图像层在最上层显示
-            const layerIndex = viewer.imageryLayers.indexOf(imageryLayer);
-            if (layerIndex !== viewer.imageryLayers.length - 1) {
-                viewer.imageryLayers.raise(imageryLayer);
-                console.log('已将NC数据图像层提升到顶层');
-            }
+            viewer.imageryLayers.raiseToTop(imageryLayer);
+            console.log('已将NC数据图像层提升到顶层');
             
             console.log('图片图层添加成功:', {
                 image_size: `${imageData.width}x${imageData.height}`,
@@ -465,7 +498,7 @@ async function visualizeWithBackendData(variableName) {
                 longitude_range: imageData.longitude_range,
                 latitude_range: imageData.latitude_range,
                 spatial_extent: extent,
-                // 移除透明度设置，使用默认值
+                alpha: imageryLayer.alpha,
                 layerIndex: viewer.imageryLayers.indexOf(imageryLayer),
                 totalLayers: viewer.imageryLayers.length
             });
@@ -913,6 +946,17 @@ document.addEventListener('DOMContentLoaded', function() {
     // 透明度变化监听
     document.getElementById('opacity').addEventListener('input', function() {
         document.getElementById('opacityValue').textContent = this.value;
+        
+        // 更新当前显示的NC数据图层的透明度
+        if (viewer && viewer.imageryLayers.length > 1) {
+            // 假设NC数据图层是最后添加的图层（除了基础地球纹理）
+            const ncDataLayer = viewer.imageryLayers.get(viewer.imageryLayers.length - 1);
+            if (ncDataLayer && ncDataLayer.imageryProvider.constructor.name === 'SingleTileImageryProvider') {
+                ncDataLayer.alpha = parseFloat(this.value);
+                console.log('已更新NC数据图层透明度:', this.value);
+            }
+        }
+        
         if (currentVariable) {
             updateColorbar();
         }
