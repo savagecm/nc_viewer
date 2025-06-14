@@ -95,7 +95,7 @@ def upload_file():
         print("开始解析NC文件...")
         current_nc_data = nc.Dataset(filepath, 'r')
         print("NC文件解析完成")
-        
+
         # 获取文件信息
         file_info = get_file_info(current_nc_data)
         
@@ -592,6 +592,10 @@ def get_variable_image(variable_name):
             
             # 翻转Y轴（图像坐标系与地理坐标系相反）
             rgb_data = np.flipud(rgb_data)
+
+
+
+
             
             # 如果透明度不是1.0，创建RGBA图像
             if opacity < 1.0:
@@ -1081,6 +1085,9 @@ def generate_visualization_image(variable_name):
         
         latitudes = np.array(coordinates['latitudes'])
         longitudes = np.array(coordinates['longitudes'])
+        # 打印经纬度范围
+        print(f"经度范围: {longitudes[0]} 到 {longitudes[-1]}")
+        print(f"纬度范围: {latitudes[0]} 到 {latitudes[-1]}")
         print(f"var_data.shape is {var_data.shape}")
         # 根据维度提取数据
         if len(var_data.shape) == 4:  # (time, depth/level, lat, lon)
@@ -1114,10 +1121,21 @@ def generate_visualization_image(variable_name):
         
         # 获取数据维度和经纬度范围
         data_height, data_width = data.shape  # lat, lon
-        latitudes = np.flipud(latitudes)  # 对应数据翻转
+        #latitudes = np.flipud(latitudes)  # 对应数据翻转
+        # 如果纬度范围从正极值开始到负极值，责需要沿着赤道进行翻转，从latitudes[0]到latitudes[-1]
+        if latitudes[0] > latitudes[-1]:
+            # 当纬度从大到小排列时，需要翻转数据和纬度数组
+            # 使纬度从小到大排列（南极到北极）
+            data = np.flipud(data)
+            latitudes = np.flipud(latitudes)
+            print("纬度从大到小排列，已翻转数据使其从小到大排列")
+            print(f"翻转后纬度范围: {latitudes[0]:.2f} 到 {latitudes[-1]:.2f}")
+
+
         
         lat_min, lat_max = float(np.min(latitudes)), float(np.max(latitudes))
         lon_min, lon_max = float(np.min(longitudes)), float(np.max(longitudes))
+        
         
         # 处理经度范围：统一转换为[-180, 180]格式
         if lon_min >= 0 and lon_max > 180:
@@ -1774,7 +1792,7 @@ def close_file():
 if __name__ == '__main__':
     print("🌍 3D NC文件可视化器 - 后端服务启动")
     print("=" * 50)
-    print(f"📍 服务器地址: http://localhost:8080")
+    print(f"📍 服务器地址: http://localhost:8081")
     print(f"📁 上传目录: {UPLOAD_FOLDER}")
     print(f"💡 支持的文件格式: .nc")
     print(f"📊 最大文件大小: 5GB")
