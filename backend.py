@@ -1624,8 +1624,8 @@ def get_colorbar_info(variable_name):
                 color = get_color_from_custom_colormap(normalized_value, custom_colormap)
                 
                 colorbar_steps.append({
-                    'value': actual_value,
-                    'normalized': normalized_value,
+                    'value': float(actual_value),
+                    'normalized': float(normalized_value),
                     'color': color
                 })
         else:
@@ -1642,8 +1642,8 @@ def get_colorbar_info(variable_name):
                 color = cmap(normalized_value)
                 
                 colorbar_steps.append({
-                    'value': actual_value,
-                    'normalized': normalized_value,
+                    'value': float(actual_value),
+                    'normalized': float(normalized_value),
                     'color': [int(c * 255) for c in color[:3]]  # RGB
                 })
         
