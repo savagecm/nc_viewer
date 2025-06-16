@@ -10,6 +10,53 @@ let customColormap = null; // 存储自定义颜色映射
 // API基础URL
 const API_BASE = '/api';
 
+// 生成标签页唯一标识符
+let tabId = null;
+
+// 生成UUID函数
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+// 初始化标签页ID
+function initializeTabId() {
+    tabId = generateUUID();
+    console.log('标签页ID已生成:', tabId);
+}
+
+// 获取带有标签页ID的请求头
+function getRequestHeaders() {
+    return {
+        'X-Tab-ID': tabId,
+        'Content-Type': 'application/json'
+    };
+}
+
+// 处理session相关错误
+function handleSessionError(error, errorData) {
+    if (errorData && errorData.error_code) {
+        switch (errorData.error_code) {
+            case 'NO_FILE':
+                alert('会话中没有加载的NC文件，请重新上传文件。');
+                // 重置界面状态
+                document.getElementById('variableSection').style.display = 'none';
+                document.getElementById('colorbarSection').style.display = 'none';
+                break;
+            case 'FILE_MISMATCH':
+                alert(`文件不匹配错误：\n当前文件: ${errorData.current_file}\n期望文件: ${errorData.expected_file}\n\n请刷新页面或重新上传正确的文件。`);
+                break;
+            default:
+                alert('会话错误: ' + errorData.error);
+        }
+    } else {
+        alert('请求失败: ' + error.message);
+    }
+}
+
 // 初始化Cesium viewer
 function initializeCesium() {
     console.log('开始初始化Cesium...');
@@ -140,7 +187,11 @@ function uploadNCFile(file) {
     
     fetch(`${API_BASE}/upload`, {
         method: 'POST',
-        body: formData
+        body: formData,
+        credentials: 'include',
+        headers: {
+            'X-Tab-ID': tabId
+        }
     })
     .then(response => {
         if (!response.ok) {
@@ -203,7 +254,10 @@ function displayFileInfo(info) {
 
 // 加载变量列表
 function loadVariables() {
-    fetch(`${API_BASE}/variables`)
+    fetch(`${API_BASE}/variables`, {
+        credentials: 'include',
+        headers: getRequestHeaders()
+    })
     .then(response => {
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -217,8 +271,21 @@ function loadVariables() {
             throw new Error(data.error || '获取变量失败');
         }
     })
-    .catch(error => {
+    .catch(async error => {
         console.error('加载变量错误:', error);
+        try {
+            const response = await fetch(`${API_BASE}/variables`, {
+                credentials: 'include',
+                headers: getRequestHeaders()
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                handleSessionError(error, errorData);
+                return;
+            }
+        } catch (e) {
+            // 如果无法获取详细错误信息，显示通用错误
+        }
         alert('加载变量列表失败: ' + error.message);
     });
 }
@@ -390,9 +457,16 @@ async function visualizeWithBackendData(variableName) {
         console.log('请求图片URL:', imageUrl);
         
         // 获取图片数据和分辨率信息
-        const imageResponse = await fetch(imageUrl);
+        const imageResponse = await fetch(imageUrl, {
+            credentials: 'include',
+            headers: getRequestHeaders()
+        });
         if (!imageResponse.ok) {
             const errorData = await imageResponse.json();
+            if (errorData.error_code) {
+                handleSessionError(new Error('图片请求失败'), errorData);
+                return;
+            }
             throw new Error(errorData.error || `HTTP错误 ${imageResponse.status}`);
         }
         
@@ -551,7 +625,10 @@ async function visualizeWithBackendData(variableName) {
             console.log('Debug: 添加了维度参数:', dimensionParams);
         }
         console.log('Debug: colorbarUrl =', colorbarUrl);
-        const colorbarResponse = await fetch(colorbarUrl);
+        const colorbarResponse = await fetch(colorbarUrl, {
+            credentials: 'include',
+            headers: getRequestHeaders()
+        });
         if (colorbarResponse.ok) {
             const colorbarData = await colorbarResponse.json();
             if (colorbarData.success) {
@@ -1120,9 +1197,16 @@ async function visualizeWithGeoJSON(variableName) {
     
     try {
         // 获取GeoJSON数据
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            credentials: 'include',
+            headers: getRequestHeaders()
+        });
         if (!response.ok) {
             const errorData = await response.json();
+            if (errorData.error_code) {
+                handleSessionError(new Error('数据请求失败'), errorData);
+                return;
+            }
             throw new Error(errorData.error || `HTTP错误 ${response.status}`);
         }
         

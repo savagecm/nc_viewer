@@ -5,7 +5,7 @@
 处理NC文件上传、解析和数据提供
 """
 
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, session
 from flask_cors import CORS
 import matplotlib
 import netCDF4 as nc
@@ -19,6 +19,9 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
 import time
+import uuid
+import threading
+from datetime import datetime, timedelta
 
 # 全局缓存变量
 _earth_texture_cache = None
@@ -28,16 +31,104 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 
 app = Flask(__name__)
-CORS(app)  # 启用CORS支持
+CORS(app, supports_credentials=True)  # 启用CORS支持，支持凭据
 
 # 配置
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB max file size
+app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'  # 用于会话管理
 UPLOAD_FOLDER = tempfile.mkdtemp()
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# 全局变量存储当前NC数据
-current_nc_data = None
-current_file_path = None
+# 多用户会话管理
+user_sessions = {}  # 存储用户会话数据
+session_lock = threading.Lock()  # 线程锁保护会话数据
+
+class UserSession:
+    """用户会话类，存储每个用户的NC数据"""
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.nc_data = None
+        self.file_path = None
+        self.created_at = datetime.now()
+        self.last_accessed = datetime.now()
+    
+    def update_access_time(self):
+        self.last_accessed = datetime.now()
+    
+    def cleanup(self):
+        """清理会话资源"""
+        if self.nc_data:
+            try:
+                self.nc_data.close()
+            except:
+                pass
+            self.nc_data = None
+        
+        if self.file_path and os.path.exists(self.file_path):
+            try:
+                os.remove(self.file_path)
+            except:
+                pass
+            self.file_path = None
+
+def get_user_session():
+    """获取或创建用户会话，支持基于标签页ID的session隔离"""
+    # 优先使用标签页ID，如果没有则使用传统的session cookie
+    tab_id = request.headers.get('X-Tab-ID')
+    
+    if tab_id:
+        # 使用标签页ID作为session标识符
+        session_id = f"tab_{tab_id}"
+    else:
+        # 回退到传统的session cookie机制
+        if 'session_id' not in session:
+            session['session_id'] = str(uuid.uuid4())
+        session_id = session['session_id']
+    
+    with session_lock:
+        if session_id not in user_sessions:
+            user_sessions[session_id] = UserSession(session_id)
+        
+        user_sessions[session_id].update_access_time()
+        return user_sessions[session_id]
+
+def cleanup_expired_sessions():
+    """清理过期会话（超过2小时未访问）"""
+    with session_lock:
+        current_time = datetime.now()
+        expired_sessions = []
+        
+        for session_id, user_session in user_sessions.items():
+            if current_time - user_session.last_accessed > timedelta(hours=2):
+                expired_sessions.append(session_id)
+        
+        for session_id in expired_sessions:
+            user_sessions[session_id].cleanup()
+            del user_sessions[session_id]
+            print(f"清理过期会话: {session_id}")
+
+def validate_session_state(user_session, expected_file_path=None):
+    """验证session状态，检查文件是否匹配"""
+    if user_session.nc_data is None:
+        return {'valid': False, 'error': '没有加载NC文件', 'error_code': 'NO_FILE'}
+    
+    if expected_file_path and user_session.file_path != expected_file_path:
+        return {
+            'valid': False, 
+            'error': f'文件不匹配。当前文件: {user_session.file_path}, 期望文件: {expected_file_path}',
+            'error_code': 'FILE_MISMATCH',
+            'current_file': user_session.file_path,
+            'expected_file': expected_file_path
+        }
+    
+    return {'valid': True}
+
+# 定期清理过期会话
+def start_cleanup_timer():
+    threading.Timer(3600, start_cleanup_timer).start()  # 每小时清理一次
+    cleanup_expired_sessions()
+
+start_cleanup_timer()
 
 def allowed_file(filename):
     """检查文件扩展名"""
@@ -59,8 +150,6 @@ def static_files(filename):
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """上传NC文件"""
-    global current_nc_data, current_file_path
-    
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': '没有选择文件'})
@@ -72,11 +161,19 @@ def upload_file():
         if not file.filename.lower().endswith('.nc'):
             return jsonify({'success': False, 'error': '只支持.nc格式文件'})
         
+        # 获取用户会话
+        user_session = get_user_session()
+        
+        # 清理之前的文件（如果存在）
+        user_session.cleanup()
+        
         # 保存文件（流式保存以处理大文件）
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        # 为每个会话创建独立的文件名，避免冲突
+        unique_filename = f"{user_session.session_id}_{filename}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         
-        print(f"开始保存大文件: {filename}")
+        print(f"会话 {user_session.session_id} 开始保存大文件: {filename}")
         
         # 分块保存文件以节省内存
         chunk_size = 8192  # 8KB chunks
@@ -87,17 +184,17 @@ def upload_file():
                     break
                 f.write(chunk)
         
-        print(f"文件保存完成: {filepath}")
+        print(f"会话 {user_session.session_id} 文件保存完成: {filepath}")
         
         # 解析NC文件
-        current_file_path = filepath
+        user_session.file_path = filepath
         
-        print("开始解析NC文件...")
-        current_nc_data = nc.Dataset(filepath, 'r')
-        print("NC文件解析完成")
+        print(f"会话 {user_session.session_id} 开始解析NC文件...")
+        user_session.nc_data = nc.Dataset(filepath, 'r')
+        print(f"会话 {user_session.session_id} NC文件解析完成")
 
         # 获取文件信息
-        file_info = get_file_info(current_nc_data)
+        file_info = get_file_info(user_session.nc_data)
         
         return jsonify({
             'success': True,
@@ -179,14 +276,19 @@ def get_file_info(dataset):
 @app.route('/api/variables', methods=['GET'])
 def get_variables():
     """获取变量列表"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if current_nc_data is None:
-        return jsonify({'error': '没有加载NC文件'}), 400
+    # 验证session状态
+    validation_result = validate_session_state(user_session)
+    if not validation_result['valid']:
+        return jsonify({
+            'error': validation_result['error'],
+            'error_code': validation_result['error_code']
+        }), 400
     
     try:
         variables = []
-        for var_name, var in current_nc_data.variables.items():
+        for var_name, var in user_session.nc_data.variables.items():
             # 只返回多维数据变量
             if len(var.dimensions) >= 2:
                 # 获取维度详细信息
@@ -217,9 +319,9 @@ def get_variables():
 @app.route('/api/coordinates', methods=['GET'])
 def get_coordinates():
     """获取坐标信息"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if current_nc_data is None:
+    if user_session.nc_data is None:
         return jsonify({'error': '没有加载NC文件'}), 400
     
     try:
@@ -234,8 +336,8 @@ def get_coordinates():
         
         # 查找纬度
         for name in lat_names:
-            if name in current_nc_data.variables:
-                lat_data = current_nc_data.variables[name][:]
+            if name in user_session.nc_data.variables:
+                lat_data = user_session.nc_data.variables[name][:]
                 # 处理NaN值
                 lat_clean = np.where(np.isnan(lat_data) | np.isinf(lat_data), None, lat_data)
                 latitudes = lat_clean.tolist()
@@ -244,8 +346,8 @@ def get_coordinates():
         
         # 查找经度
         for name in lon_names:
-            if name in current_nc_data.variables:
-                lon_data = current_nc_data.variables[name][:]
+            if name in user_session.nc_data.variables:
+                lon_data = user_session.nc_data.variables[name][:]
                 # 处理NaN值
                 lon_clean = np.where(np.isnan(lon_data) | np.isinf(lon_data), None, lon_data)
                 longitudes = lon_clean.tolist()
@@ -315,13 +417,13 @@ def extract_coordinates(dataset):
 @app.route('/api/image/<variable_name>', methods=['GET'])
 def get_variable_image(variable_name):
     """生成变量数据的灰度图像并保存为PNG文件"""
-    global current_nc_data
+    user_session = get_user_session()
     
     try:
-        if not current_nc_data:
+        if not user_session.nc_data:
             return jsonify({'error': '没有打开的NC文件'}), 400
         
-        if variable_name not in current_nc_data.variables:
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         # 获取维度选择参数
@@ -342,7 +444,7 @@ def get_variable_image(variable_name):
         
         print(f"开始生成变量图像: {variable_name}, 维度选择: {dimension_indices}")
         
-        var = current_nc_data.variables[variable_name]
+        var = user_session.nc_data.variables[variable_name]
         data = var[:]
         
         # 获取经纬度信息
@@ -350,8 +452,8 @@ def get_variable_image(variable_name):
         lon_var = None
         
         # 查找经纬度变量
-        for var_name in current_nc_data.variables:
-            var_obj = current_nc_data.variables[var_name]
+        for var_name in user_session.nc_data.variables:
+            var_obj = user_session.nc_data.variables[var_name]
             if hasattr(var_obj, 'standard_name'):
                 if var_obj.standard_name in ['latitude', 'lat']:
                     lat_var = var_obj
@@ -366,10 +468,10 @@ def get_variable_image(variable_name):
             # 如果找不到经纬度变量，尝试从维度中获取
             dims = var.dimensions
             for dim_name in dims:
-                if dim_name.lower() in ['lat', 'latitude', 'y'] and dim_name in current_nc_data.variables:
-                    lat_var = current_nc_data.variables[dim_name]
-                elif dim_name.lower() in ['lon', 'longitude', 'x'] and dim_name in current_nc_data.variables:
-                    lon_var = current_nc_data.variables[dim_name]
+                if dim_name.lower() in ['lat', 'latitude', 'y'] and dim_name in user_session.nc_data.variables:
+                    lat_var = user_session.nc_data.variables[dim_name]
+                elif dim_name.lower() in ['lon', 'longitude', 'x'] and dim_name in user_session.nc_data.variables:
+                    lon_var = user_session.nc_data.variables[dim_name]
         
         # 处理多维数据，根据用户选择的维度进行切片
         original_shape = data.shape
@@ -665,13 +767,21 @@ def serve_generated_image(filename):
 @app.route('/api/visualization/<variable_name>', methods=['GET'])
 def get_visualization_data(variable_name):
     """获取变量的可视化数据，支持分页和瓦片化传输"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if not current_nc_data:
-        return jsonify({'error': '没有打开的NC文件'}), 400
+    # 验证session状态
+    validation_result = validate_session_state(user_session)
+    if not validation_result['valid']:
+        return jsonify({
+            'error': validation_result['error'],
+            'error_code': validation_result['error_code']
+        }), 400
     
     try:
-        if variable_name not in current_nc_data.variables:
+        print(f"请求的变量名: '{variable_name}'")
+        print(f"可用变量列表: {list(user_session.nc_data.variables.keys())}")
+        
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         # 获取参数
@@ -721,11 +831,11 @@ def get_visualization_data(variable_name):
             print(f"空间范围: 纬度[{lat_min}, {lat_max}], 经度[{lon_min}, {lon_max}]")
         
         # 获取变量数据
-        var_data = current_nc_data.variables[variable_name]
+        var_data = user_session.nc_data.variables[variable_name]
         print(f"变量形状: {var_data.shape}")
         
         # 获取坐标信息
-        coordinates = extract_coordinates(current_nc_data)
+        coordinates = extract_coordinates(user_session.nc_data)
         if not coordinates:
             return jsonify({'error': '无法提取坐标信息'}), 400
         
@@ -1037,13 +1147,21 @@ def apply_custom_colormap_vectorized(normalized_values, colormap):
 @app.route('/api/visualization/<variable_name>/image', methods=['GET'])
 def generate_visualization_image(variable_name):
     """生成可视化图片，按照三个步骤处理：地球纹理预处理、NC数据处理、图像合成"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if not current_nc_data:
-        return jsonify({'error': '没有打开的NC文件'}), 400
+    # 验证session状态
+    validation_result = validate_session_state(user_session)
+    if not validation_result['valid']:
+        return jsonify({
+            'error': validation_result['error'],
+            'error_code': validation_result['error_code']
+        }), 400
     
     try:
-        if variable_name not in current_nc_data.variables:
+        print(f"图像生成请求的变量名: '{variable_name}'")
+        print(f"可用变量列表: {list(user_session.nc_data.variables.keys())}")
+        
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         # 获取参数
@@ -1078,8 +1196,8 @@ def generate_visualization_image(variable_name):
         print(f"层级参数: time_index={time_index}, depth_index={depth_index}, level_index={level_index}")
         
         # 获取变量数据和坐标信息
-        var_data = current_nc_data.variables[variable_name]
-        coordinates = extract_coordinates(current_nc_data)
+        var_data = user_session.nc_data.variables[variable_name]
+        coordinates = extract_coordinates(user_session.nc_data)
         if not coordinates:
             return jsonify({'error': '无法提取坐标信息'}), 400
         
@@ -1383,13 +1501,21 @@ def generate_visualization_image(variable_name):
 @app.route('/api/visualization/<variable_name>/colorbar', methods=['GET'])
 def get_colorbar_info(variable_name):
     """获取颜色条信息"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if not current_nc_data:
-        return jsonify({'error': '没有打开的NC文件'}), 400
+    # 验证session状态
+    validation_result = validate_session_state(user_session)
+    if not validation_result['valid']:
+        return jsonify({
+            'error': validation_result['error'],
+            'error_code': validation_result['error_code']
+        }), 400
     
     try:
-        if variable_name not in current_nc_data.variables:
+        print(f"颜色条请求的变量名: '{variable_name}'")
+        print(f"可用变量列表: {list(user_session.nc_data.variables.keys())}")
+        
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         color_scheme = request.args.get('color_scheme', 'viridis')
@@ -1406,7 +1532,7 @@ def get_colorbar_info(variable_name):
                 custom_colormap = None
         
         # 获取数据范围（与图片生成保持一致）
-        var_data = current_nc_data.variables[variable_name]
+        var_data = user_session.nc_data.variables[variable_name]
         
         # 获取维度参数
         time_index = request.args.get('time_index', type=int)
@@ -1539,13 +1665,21 @@ def get_colorbar_info(variable_name):
 @app.route('/api/visualization/<variable_name>/info', methods=['GET'])
 def get_visualization_info(variable_name):
     """获取可视化数据的概览信息，不返回具体数据点"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if not current_nc_data:
-        return jsonify({'error': '没有打开的NC文件'}), 400
+    # 验证session状态
+    validation_result = validate_session_state(user_session)
+    if not validation_result['valid']:
+        return jsonify({
+            'error': validation_result['error'],
+            'error_code': validation_result['error_code']
+        }), 400
     
     try:
-        if variable_name not in current_nc_data.variables:
+        print(f"可视化信息请求的变量名: '{variable_name}'")
+        print(f"可用变量列表: {list(user_session.nc_data.variables.keys())}")
+        
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         # 获取参数
@@ -1560,10 +1694,10 @@ def get_visualization_info(variable_name):
             level_index = request.args.get('im_level', type=int)
         
         # 获取变量数据
-        var_data = current_nc_data.variables[variable_name]
+        var_data = user_session.nc_data.variables[variable_name]
         
         # 获取坐标信息
-        coordinates = extract_coordinates(current_nc_data)
+        coordinates = extract_coordinates(user_session.nc_data)
         if not coordinates:
             return jsonify({'error': '无法提取坐标信息'}), 400
         
@@ -1669,20 +1803,20 @@ def get_visualization_info(variable_name):
 @app.route('/api/data/<variable_name>', methods=['GET'])
 def get_variable_data_json(variable_name):
     """获取变量数据的JSON格式，供前端直接渲染"""
-    global current_nc_data
+    user_session = get_user_session()
     
-    if not current_nc_data:
+    if not user_session.nc_data:
         return jsonify({'error': '没有打开的NC文件'}), 400
     
     try:
-        if variable_name not in current_nc_data.variables:
+        if variable_name not in user_session.nc_data.variables:
             return jsonify({'error': f'变量 {variable_name} 不存在'}), 400
         
         # 获取变量数据
-        var_data = current_nc_data.variables[variable_name]
+        var_data = user_session.nc_data.variables[variable_name]
         
         # 获取坐标信息
-        coordinates = extract_coordinates(current_nc_data)
+        coordinates = extract_coordinates(user_session.nc_data)
         if not coordinates:
             return jsonify({'error': '无法提取坐标信息'}), 400
         
@@ -1772,16 +1906,16 @@ def get_variable_data_json(variable_name):
 @app.route('/api/close', methods=['POST'])
 def close_file():
     """关闭当前文件"""
-    global current_nc_data, current_file_path
+    user_session = get_user_session()
     
     try:
-        if current_nc_data:
-            current_nc_data.close()
-            current_nc_data = None
+        if user_session.nc_data:
+            user_session.nc_data.close()
+            user_session.nc_data = None
         
-        if current_file_path and os.path.exists(current_file_path):
-            os.remove(current_file_path)
-            current_file_path = None
+        if user_session.file_path and os.path.exists(user_session.file_path):
+            os.remove(user_session.file_path)
+            user_session.file_path = None
         
         return jsonify({'success': True, 'message': '文件已关闭'})
         
